@@ -289,6 +289,13 @@ contract ShareToken is ERC1155Supply {
 3. conditions[conditionId].prepared == true
 ```
 
+**Why status == Open only (not Pending)**:
+If the oracle has already proposed a resolution (status == Pending), the dispute
+period mechanism handles resolution. markAsInvalid is a safety valve for **oracle
+inactivity only** — when the oracle fails to propose any outcome within the
+ADMIN_RESOLVE_WINDOW after the deadline. If the oracle proposed but the admin
+has not finalized, the normal dispute→finalize path applies.
+
 **Who can call**: Anyone. Safety valve, not privileged.
 
 **Effects**:
@@ -459,7 +466,7 @@ contract Exchange {
     // Order state
     mapping(bytes32 => uint256) public ordersFilled;
     mapping(bytes32 => bool) public ordersCancelled;
-    mapping(address => uint256) public nonces;
+    mapping(address => uint256) public nonces;  // minValidNonce: orders with nonce < this are invalid
 
     // Token registry
     mapping(uint256 => uint256) public complements;
@@ -482,7 +489,7 @@ contract Exchange {
     event OrdersMatched(bytes32 indexed takerOrderHash, bytes32 indexed makerOrderHash,
         MatchType matchType, uint256 fillAmount);
     event OrderCancelled(bytes32 indexed orderHash, address indexed maker);
-    event NonceBumped(address indexed user, uint256 oldNonce, uint256 newNonce);
+    event NonceBumped(address indexed user, uint256 oldNonce, uint256 newNonce); // newNonce = new minValidNonce
     event ConditionPaused(bytes32 indexed conditionId);
     event ConditionUnpaused(bytes32 indexed conditionId);
 
@@ -506,7 +513,10 @@ contract Exchange {
     ) external; // onlyOperator, nonReentrant, whenNotPaused, whenConditionNotPaused
 
     // User self-service (ALLOWED even when paused)
+    // cancelOrder: only order.maker can cancel (require(msg.sender == order.maker)).
+    // Delegated signers CANNOT cancel on behalf of maker — maker retains sole cancel authority.
     function cancelOrder(Order memory order) external;
+    // bumpNonce: sets nonces[msg.sender] = newNonce, bulk-invalidating orders with nonce < newNonce.
     function bumpNonce(uint256 newNonce) external;
 
     // Fee withdrawal
@@ -532,6 +542,8 @@ function _validateOrder(Order memory order, bytes memory sig, uint256 fillAmount
     require(!ordersCancelled[orderHash], "cancelled");
 
     // 3. Nonce check (bulk cancel)
+    // nonces[maker] is the minimum valid nonce (minValidNonce).
+    // bumpNonce(N) sets nonces[maker] = N, invalidating all orders with nonce < N.
     require(order.nonce >= nonces[order.maker], "nonce too low");
 
     // 4. Expiration
@@ -665,12 +677,14 @@ contract DelegationRegistry {
     struct Delegation {
         bool active;
         address scope;
-        uint256 tokenScope;         // conditionId as uint256, or 0 for any
-        uint256 maxNotionalPerDay;
-        uint256 maxMarketsPerDay;
+        uint256 tokenScope;         // uint256(conditionId), or 0 for any market
+                                     // Cast: tokenScope == uint256(conditionId). Checked in isAuthorized.
+        uint256 maxNotionalPerDay;   // USDC (6 decimals), 0 = unlimited
+        uint256 maxMarketsPerDay;    // count, 0 = unlimited
         uint256 spentToday;
         uint256 marketsCreatedToday;
-        uint64 dayStart;
+        uint64 dayStart;             // Rolling 24h window start. Reset when block.timestamp >= dayStart + 24h.
+                                     // NOT calendar day — rolling from first spend/creation in current window.
         uint64 expiresAt;
     }
 
@@ -932,9 +946,8 @@ SOLUTION: BackstopRouter is the SINGLE approval target for LMSR sells.
 ### 7.2 Nonce & Replay Model (STRICT SEQUENTIAL)
 
 ```
-Replay protection is TWO-LAYER (same model as Factory):
+REPLAY PROTECTION: strict sequential nonce (primary mechanism).
 
-Layer 1 — Nonce (STRICT sequential, primary):
   mapping(address => uint256) public nonces;  // signer → next expected nonce
   require(intent.nonce == nonces[intent.signer], "bad nonce");
   nonces[intent.signer]++;
@@ -948,9 +961,12 @@ Layer 1 — Nonce (STRICT sequential, primary):
   external calls (_executeBuy/_executeSell). See §7.4 step 6.
   If the external call reverts, the whole tx rolls back — nonce stays unchanged.
 
-Layer 2 — intentHash (secondary, for cancel):
+INTENT CANCEL REGISTRY: usedIntentHashes (per-intent cancellation, NOT replay protection).
+
   mapping(bytes32 => bool) public usedIntentHashes;
-  Used for: (a) preventing double-execution, (b) implementing cancelIntent.
+
+  Purpose: (a) per-intent cancellation via cancelIntent, (b) defense-in-depth
+  against double-execution (redundant given strict nonce, but cheap to enforce).
 
   cancelIntent marks usedIntentHashes[hash] = true → intent becomes non-executable.
   This is the ONLY mechanism for single-intent cancellation.
@@ -962,8 +978,10 @@ Layer 2 — intentHash (secondary, for cancel):
   intentHash and pass both nonce and hash checks. This is by design:
   cancelIntent is per-intent, not per-nonce-slot.
 
-Source of truth: nonce is PRIMARY (determines ordering, enables bulk cancel).
-intentHash map is SECONDARY (single-cancel + defense-in-depth).
+Summary:
+  Replay protection     → nonce (strict sequential, determines ordering)
+  Single-intent cancel  → usedIntentHashes (per-intent cancel registry)
+  Bulk cancel           → bumpNonce (invalidates all nonces below threshold)
 ```
 
 ### 7.3 cancelIntent
@@ -1138,6 +1156,22 @@ Code in executeTradeIntent (step 8):
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
+### 8.1.1 USDC Trust Assumptions
+
+```
+USDC is the SOLE collateral. The following assumptions are required:
+
+1. No fee-on-transfer: USDC.transfer(to, amount) delivers exactly `amount` to `to`.
+   (USDC on Base is canonical Circle USDC — no transfer fees.)
+2. No rebase: USDC.balanceOf(vault) does not change without a transfer to/from vault.
+3. Trusted view: USDC.balanceOf(address) is a pure view call with no side effects.
+   Used in the global invariant check — safe to call at end of every external function.
+4. 6 decimals: 1 USDC = 1_000_000 units. All internal math assumes this.
+
+If a future collateral token violates any of these, the Vault accounting model
+must be revisited.
+```
+
 ### 8.2 State Transitions (exhaustive, with totalBalances)
 
 ```
@@ -1275,83 +1309,26 @@ Open ──propose──► Pending ──24h──► Finalize ──► Resolv
 Open ──deadline+6h──► markAsInvalid() ──► Resolved (Invalid)
 ```
 
+**pauseCondition on resolution**: Both `finalizeResolution()` and `markAsInvalid()`
+call `exchange.pauseCondition(conditionId)` as a side effect. This ensures no CLOB
+orders can be matched for a resolved market. The pause is FINAL — `unpauseCondition`
+is not called after resolution.
+
 See §3.1 for markAsInvalid semantics.
 
 ---
 
-## 11. Offchain Matching Engine
+## 11. Offchain Components (non-protocol)
 
-### REST API
-
-```
-POST   /v1/orders              Submit signed CLOB order
-POST   /v1/intents             Submit signed TradeIntent (LMSR)
-DELETE /v1/orders/:hash        Cancel order offchain
-GET    /v1/orderbook/:condId   Book (bids/asks)
-GET    /v1/trades/:condId      Recent trades
-GET    /v1/quote               Firm quote: CLOB + LMSR split, limit prices, partial fill warning
-GET    /v1/markets             Markets with prices
-```
-
-### Firm Quote for Mixed Fills
-
-```
-GET /v1/quote?conditionId=X&side=YES&amount=100&type=buy
-
-Response:
-{
-  "totalShares": 100_000_000,
-  "avgPrice": 5200,
-  "legs": [
-    { "source": "clob", "shares": 60_000_000, "price": 5000, "limitPrice": 5050 },
-    { "source": "lmsr", "shares": 40_000_000, "price": 5400, "minSharesOut": 39_500_000 }
-  ],
-  "validUntilBlock": 12345678,
-  "mayPartialFill": true,
-  "fee": { "totalUsdc": 490_000, "effectiveRate": "0.49%" }
-}
-
-UI shows: "May fill partially. CLOB: 60 shares @ $0.50, LMSR: 40 shares @ $0.54"
-```
-
-### WebSocket
-
-```
-ws://engine/v1/ws
-Channels: orderbook:{condId}, trades:{condId}, prices:{condId}, user:{addr}, system
-```
+> Offchain matching engine, agent API backend, and frontend UX are NOT part of the
+> on-chain protocol specification. They are documented separately:
+>
+> - [Offchain Matching Engine](OFFCHAIN_ENGINE.md) — REST API, WebSocket, firm quotes
+> - [Agent API Reference](AGENT_API.md) — Agent endpoints, authentication, rate limits
 
 ---
 
-## 12. Agent API Backend
-
-### Endpoints
-
-```
-GET    /api/agent/ping
-POST   /api/agent/api-key
-
-POST   /api/agent/markets              Request market creation (returns EIP-712 typed data)
-POST   /api/agent/relay                Submit signed meta-tx
-GET    /api/agent/markets              List agent markets
-GET    /api/agent/markets/:condId      Market details
-GET    /api/agent/markets/:condId/history  Price history
-
-POST   /api/agent/orders               Submit signed CLOB order
-POST   /api/agent/intents              Submit signed TradeIntent (LMSR)
-DELETE /api/agent/orders/:hash         Cancel order
-GET    /api/agent/orders/open          Open orders
-GET    /api/agent/orderbook/:condId    Order book
-
-GET    /api/agent/portfolio            Positions (ERC-1155)
-GET    /api/agent/stats                Stats
-GET    /api/agents/leaderboard         Leaderboard
-GET    /api/agent/markets/explore      Catalog
-```
-
----
-
-## 13. Indexer Events (complete)
+## 12. Indexer Events (complete)
 
 ### ShareToken
 | Event | Key fields | Usage |
@@ -1403,41 +1380,7 @@ Volume = Σ Exchange.OrderFilled.usdcAmount + Σ BackstopRouter.BackstopTrade.am
 
 ---
 
-## 14. Frontend UX
-
-### Fee Display
-
-```
-Total fee = 1% (protocol 0.5% + creator 0.5%)
-Effective = totalFeeBps * min(price, 1-price) * size / BPS²
-
-At price $0.50: effective = 1% * 0.50 = 0.50% of notional
-At price $0.90: effective = 1% * 0.10 = 0.10% of notional
-
-UI: "Fee: $0.50 (0.5% of trade)" — always show by EXECUTION price, not mid.
-```
-
-### Approvals (one-time, 3 total)
-```
-ShareToken.setApprovalForAll(exchange, true)         // for CLOB selling
-ShareToken.setApprovalForAll(backstopRouter, true)   // for LMSR selling (see §7.1.1)
-Vault.approveMarket(backstopRouter, MAX_UINT)        // for LMSR buying (USDC)
-
-No per-market approvals. CLOB buying needs no approval (signed order IS auth).
-
-UI flow: on first interaction, prompt user for 3 approvals in sequence.
-Subsequent interactions require zero approvals.
-```
-
-### Mixed Fill UX
-```
-UI must show: "May fill partially" when firm quote includes LMSR leg.
-Show breakdown: "CLOB: 60 @ $0.50 + LMSR: 40 @ $0.54 = avg $0.52"
-```
-
----
-
-## 15. Security Analysis
+## 13. Security Analysis
 
 ### Attack Vectors & Mitigations
 
@@ -1462,13 +1405,13 @@ Show breakdown: "CLOB: 60 @ $0.50 + LMSR: 40 @ $0.54 = avg $0.52"
 
 ---
 
-## 16. Migration Plan
+## 14. Migration Plan
 
 Same as v4 §16. Addition: BackstopRouter now requires EIP-712 domain setup.
 
 ---
 
-## 17. Contract Sizes
+## 15. Contract Sizes
 
 | Contract | Est. Size | EIP-170 |
 |----------|----------|---------|
@@ -1482,7 +1425,7 @@ Same as v4 §16. Addition: BackstopRouter now requires EIP-712 domain setup.
 
 ---
 
-## 18. Resolved Questions (v1–v5.2)
+## 16. Resolved Questions (v1–v5.2)
 
 | # | Issue | Resolution | §  |
 |---|-------|-----------|-----|
@@ -1511,13 +1454,13 @@ Same as v4 §16. Addition: BackstopRouter now requires EIP-712 domain setup.
 | 23 | **Vault double count** | **FIXED v5**: Model A, separate pools | 8.1 |
 | 24 | **Fee rates** | **Set**: protocol 0.5% + creator 0.5% = 1% total | 4 |
 | 25 | **CEI reentrancy in BackstopRouter** | **FIXED v5.2**: Effects before interactions + nonReentrant | 7.4 |
-| 26 | **BackstopTrade event SELL fields** | **FIXED v5.2**: Normalized emit (amountUsdc=USDC, shares=shares always) | 7.4, 13 |
+| 26 | **BackstopTrade event SELL fields** | **FIXED v5.2**: Normalized emit (amountUsdc=USDC, shares=shares always) | 7.4, 12 |
 | 27 | **MarketLMSR IERC1155Receiver** | **FIXED v5.2**: Explicit IERC1155Receiver + ERC165 | 6 |
 | 28 | **cancelIntent vs nonce** | **Clarified v5.2**: cancelIntent is per-intent, not per-nonce-slot | 7.2 |
 
 ---
 
-## 19. Open Questions
+## 17. Open Questions
 
 1. **Operator hosting**: Self-hosted matching engine vs managed service?
 2. **Gas reimbursement**: Operator gas from feePool accounting?
