@@ -50,5 +50,11 @@ jobs:
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
 
+      - name: Remove submodule test files (incompatible forge-std paths)
+        run: rm -rf contracts/lib/prb-math/test contracts/lib/openzeppelin-contracts/test
+
+      - name: Run forge build
+        run: forge build
+
       - name: Run forge tests
-        run: forge test -v --match-path "test/**"
+        run: forge test -v
