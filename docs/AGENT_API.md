@@ -2,6 +2,9 @@
 
 API for AI agents to programmatically create and manage prediction markets.
 
+For the on-chain Factory contract specification, see [HYBRID_SPEC_v5.md](HYBRID_SPEC_v5.md) §9.
+For delegation and spend limits, see [HYBRID_SPEC_v5.md](HYBRID_SPEC_v5.md) §5.
+
 ## Overview
 
 The Agent API uses **EIP-712 meta-transactions** for market creation. Two modes are supported:
@@ -13,12 +16,16 @@ The Agent API uses **EIP-712 meta-transactions** for market creation. Two modes 
 - The relayer calls `createMarketFor()` → creator = owner
 
 ### Autonomous Mode (Mode B) — Delegated Session Keys
-- The wallet owner creates a session key and registers on-chain delegation (`addDelegatedSigner()`)
+- The wallet owner creates a session key and registers on-chain delegation via `DelegationRegistry`
 - The agent calls `POST /api/agent/markets?auto_sign=true`
-- The session key signs the `DelegatedCreateMarket` EIP-712 payload (which includes the `owner` address)
+- The session key signs the `DelegatedCreateMarket` EIP-712 payload (which includes the `owner` address in the signed data — preventing fee redirection)
 - The relayer calls `createMarketForDelegated()` → on-chain creator = owner
-- **Creator fees always go to the wallet owner**; seed USDC is drawn from the owner's Vault
-- Policy limits: daily USDC cap, total USDC cap, TTL, max markets
+- **Creator fees always go to the wallet owner**; seed USDC is drawn from the owner's Vault balance
+- Policy limits enforced on-chain by DelegationRegistry (see §Delegation Policy)
+
+> **Owner Liability**: The wallet owner bears full financial responsibility for all markets
+> created via delegated session keys. Seed USDC is drawn from their Vault balance,
+> and the owner must ensure adequate delegation policy limits.
 
 ## Authentication
 
@@ -35,6 +42,109 @@ API keys are generated via the UI at `/app/agents` or through the `/api/agent/ap
 Rate limits are configurable per API key. Response headers include:
 - `X-RateLimit-Remaining` — remaining requests
 - `X-RateLimit-Reset` — limit reset time (ISO 8601)
+
+---
+
+## EIP-712 Typed Data
+
+### CreateMarket (Mode A — owner signs directly)
+
+```solidity
+bytes32 constant CREATE_MARKET_TYPEHASH = keccak256(
+    "CreateMarket(bytes32 paramsHash,uint256 seedUsdc,uint256 initialPriceYesBps,"
+    "uint256 nonce,uint256 deadline,bytes32 requestId)"
+);
+```
+
+Domain: `{ name: "FlipCoinFactory", version: "1", chainId, verifyingContract: factoryAddress }`
+
+### DelegatedCreateMarket (Mode B — session key signs on behalf of owner)
+
+```solidity
+bytes32 constant DELEGATED_CREATE_TYPEHASH = keccak256(
+    "DelegatedCreateMarket(bytes32 paramsHash,uint256 seedUsdc,uint256 initialPriceYesBps,"
+    "uint256 nonce,uint256 deadline,bytes32 requestId,address owner)"
+);
+```
+
+Same domain as Mode A (same Factory contract).
+
+**Key difference**: `DelegatedCreateMarket` includes `owner` in the signed data.
+This prevents a compromised session key from redirecting creator fees to a different address.
+The two typehashes are structurally different, so a `CreateMarket` signature cannot be
+replayed in the `DelegatedCreateMarket` context (and vice versa).
+
+### Nonce Model
+
+```
+Factory.nonces: mapping(address => uint256)  // per-signer, strictly incrementing
+```
+
+**Mode A**: `nonces[creator]` — the owner's nonce, incremented on each `createMarketFor` call.
+**Mode B**: `nonces[signer]` — the session key's nonce, incremented on each `createMarketForDelegated` call.
+
+Each signer has an independent nonce counter. This means:
+- Multiple session keys can operate concurrently without nonce conflicts
+- Manual Mode A operations (owner signing) use a separate nonce from Mode B (session key signing)
+- An owner's nonce and their session key's nonce are independent
+
+### requestId (Idempotency)
+
+```
+API:      X-Idempotency-Key = uuid string (retained 24h)
+On-chain: requestId = keccak256(abi.encodePacked(uuid)) → bytes32
+```
+
+Both layers use the same logical ID. The API stores the uuid string; the contract
+stores `keccak256(uuid)` as `bytes32` in `Factory.usedRequestIds`. If the requestId
+has already been used on-chain, the transaction reverts.
+
+---
+
+## Delegation Policy (Mode B)
+
+On-chain enforcement via **DelegationRegistry** (see HYBRID_SPEC §5):
+
+```
+DelegationRegistry.delegations[owner][signer] = {
+    active:              bool
+    scope:               address(factory) or address(0) for all
+    tokenScope:          0 (any market) — conditionId not known at creation time
+    maxNotionalPerDay:   uint256 (USDC 6 dec) — max seed spend per rolling 24h
+    maxMarketsPerDay:    uint256 — max market creations per rolling 24h
+    spentToday:          uint256 — tracked by recordSpend()
+    marketsCreatedToday: uint256 — tracked by recordMarketCreation()
+    dayStart:            uint64 — rolling 24h window start
+    expiresAt:           uint64 — delegation TTL (0 = no expiry)
+}
+```
+
+**On-chain guarantees:**
+- `maxNotionalPerDay`: caps total seed USDC the session key can spend per rolling 24h
+- `maxMarketsPerDay`: caps number of markets created per rolling 24h
+- `expiresAt`: delegation automatically becomes invalid after TTL
+- `scope = factory`: restricts the key to market creation only (cannot trade or sign orders)
+
+**Not enforced on-chain** (application-level policy):
+- Allowed liquidity tiers (Low/Medium/High)
+- Initial price range (min/max `initialPriceYesBps`)
+- Maximum seed per individual market
+
+The relayer validates application-level policies before submitting the transaction.
+
+### Relayer Verification Steps
+
+The relayer is NOT a simple proxy. Before submitting any transaction, it performs:
+
+1. **`verifyTypedData()`** — validates the EIP-712 signature matches the claimed signer
+2. **Nonce check** — verifies `nonce == Factory.nonces[signer]` (prevents stale signatures)
+3. **requestId uniqueness** — checks `!Factory.usedRequestIds[requestId]`
+4. **Delegation check** — verifies `DelegationRegistry.isAuthorized(owner, signer, factory, bytes32(0))`
+5. **Policy validation** — checks application-level limits (allowed tiers, price range)
+6. **Expiration check** — verifies `block.timestamp <= deadline`
+7. **Balance check** — verifies owner has sufficient Vault balance for seed
+
+If any check fails, the relayer returns an error without spending gas.
 
 ---
 
@@ -95,7 +205,7 @@ Content-Type: application/json
 }
 ```
 
-> ⚠️ The API key is shown **only once**. Save it immediately!
+> The API key is shown **only once**. Save it immediately!
 
 #### Rotate (rotate an existing key)
 
@@ -169,7 +279,7 @@ Content-Type: application/json
   "requestId": "uuid",
   "typedData": {
     "domain": {
-      "name": "FlipCoin Factory",
+      "name": "FlipCoinFactory",
       "version": "1",
       "chainId": 84532,
       "verifyingContract": "0x..."
@@ -212,6 +322,9 @@ Content-Type: application/json
   }
 }
 ```
+
+> For Mode B (`auto_sign=true`), the response uses `primaryType: "DelegatedCreateMarket"`
+> with an additional `owner` field in the types and message.
 
 #### Dry Run
 
@@ -607,6 +720,10 @@ Authorization: Bearer fc_xxx
 > - `lastTradeAt` — timestamp of the last trade for this position
 > - `totals` always reflects **all** positions regardless of the `status` filter
 > - Positions are sorted by `netShares` descending (largest first)
+>
+> **Important**: `currentValueUsdc` and `pnlUsdc` are estimates based on the LMSR marginal price.
+> Actual exit value depends on trade size and available liquidity. These values are NOT guaranteed
+> redemption amounts.
 
 ---
 
@@ -693,50 +810,29 @@ console.log('Market created:', result.marketAddr);
 | 400 | `invalid signature` | The signature does not match the creator |
 | 401 | `missing authorization` | The Authorization header is missing |
 | 401 | `invalid api key` | The API key is invalid or has been revoked |
+| 403 | `insufficient scope` | The API key lacks the required scope |
 | 404 | `request not found` | Unknown requestId |
 | 429 | `rate limit exceeded` | The request rate limit has been exceeded |
 | 503 | `relayer not configured` | The relayer is not configured (dev environment) |
 
 ---
 
-## Idempotency
-
-### API-level (Database)
-
-Every POST request to `/api/agent/markets` requires a unique `X-Idempotency-Key`.
-
-- A repeated request with the same key returns the result of the original request
-- Keys are retained for 24 hours
-- Use a UUID or `{prefix}-{timestamp}` format
-
-### On-chain (Smart Contract)
-
-In addition to API-level idempotency, the contract uses a `requestId` (bytes32) for on-chain protection:
-
-- The `requestId` is included in the signature and verified by the contract
-- If the `requestId` has already been used, the transaction reverts
-- This prevents double-creation under race conditions
-- You can check the status via: `Factory.usedRequestIds(requestId)`
-
----
-
 ## Security
 
+### Authentication & Authorization
+
 1. **API Key**: Keep it secret; never commit it to version control
-2. **Key Scopes**: Each key has a `scopes[]` array of permissions. Defaults: `markets:create`, `markets:read`, `portfolio:read`
-3. **Signature**: Only the wallet owner can sign the typed data
-4. **Signature Pre-Validation**: `verifyTypedData()` validates the signature before relay (saves gas on invalid signatures)
-5. **Nonce**: Replay attack protection (per-creator, strictly incrementing)
+2. **Key Scopes**: Each key has a `scopes[]` array of permissions (see below)
+3. **Signature**: Only the wallet owner (Mode A) or delegated signer (Mode B) can sign
+4. **Signature Pre-Validation**: `verifyTypedData()` validates before relay (saves gas on invalid signatures)
+5. **Nonce**: Per-signer, strictly incrementing (prevents replay)
 6. **Deadline**: Signatures are valid for 1 hour
-7. **Trusted Relayers**: Only whitelisted addresses can call `createMarketFor`
+7. **Trusted Relayers**: Only whitelisted addresses can call `createMarketFor` / `createMarketForDelegated`
 8. **On-chain Idempotency**: `requestId` prevents double-creation
-9. **Audit Trail**: `MarketCreatedViaRelayer` event + server-side audit log (`agent_audit_log` table)
-10. **Owner-level Daily Cap**: Configurable daily market creation limit per wallet owner (across all agents)
-11. **Auto-Sign Kill Switch**: `DISABLE_AUTO_SIGN=true` env var instantly disables autonomous signing
+9. **Audit Trail**: `MarketCreatedViaRelayer` event + `agent_audit_log` table (append-only)
+10. **Auto-Sign Kill Switch**: `DISABLE_AUTO_SIGN=true` env var instantly disables autonomous signing
 
 ### Key Scopes
-
-Each API key has a set of permissions (scopes). If the key lacks the required scope, the response is `403 Insufficient scope`.
 
 | Scope | Description |
 |-------|-------------|
@@ -747,25 +843,45 @@ Each API key has a set of permissions (scopes). If the key lacks the required sc
 
 Scopes are assigned at key generation time. Default scopes: `markets:create`, `markets:read`, `portfolio:read`.
 
-### Audit Log
+### Threat Model
 
-All significant actions are logged to `agent_audit_log` (append-only).
+| Threat | Mitigation |
+|--------|-----------|
+| **Compromised API key** | API key grants request creation only, not signing. Attacker cannot create markets without a valid EIP-712 signature. Revoke immediately via `/api/agent/api-key` (action: revoke). |
+| **Compromised session key** | On-chain limits (maxNotionalPerDay, maxMarketsPerDay, expiresAt) bound the damage. Owner revokes delegation via `DelegationRegistry.revokeDelegation()`. Kill switch `DISABLE_AUTO_SIGN=true` halts all autonomous signing. |
+| **Malicious relayer** | Relayer can only submit pre-signed transactions — cannot forge signatures, alter parameters, or redirect fees. On-chain signature verification is the trust anchor. |
+| **Signature replay** | Per-signer nonce (strictly incrementing) + requestId uniqueness + 1h deadline + DOMAIN_SEPARATOR (chainId + contract address) |
+| **Cross-mode replay** | `CreateMarket` and `DelegatedCreateMarket` have different typehashes — signatures are not interchangeable |
+| **Nonce race condition** | Per-signer (not per-owner) nonces prevent Mode A / Mode B conflicts. Multiple session keys operate independently. |
+| **Fee redirection (Mode B)** | `DelegatedCreateMarket` includes `owner` in signed data. Creator fees are immutably set to `owner` by Factory. |
 
 ---
 
 ## Liquidity Tiers
 
-| Tier | Seed (USDC) | b parameter | Max Loss |
+| Tier | b (SD59x18) | Seed (USDC) | Max Loss |
 |------|-------------|-------------|----------|
-| `low` | $35 | ~50 | ~$35 |
-| `medium` | $139 | ~200 | ~$139 |
-| `high` | $693 | ~1000 | ~$693 |
+| `low` | 50 * 1e18 | $35 | $34.66 |
+| `medium` | 200 * 1e18 | $139 | $138.63 |
+| `high` | 1000 * 1e18 | $693 | $693.15 |
 
-The seed amount represents the market creator's maximum loss (if all traders win). In LMSR, `b = seed / ln(2)`.
+`b` is the LMSR liquidity parameter (fixed per tier). Seed = `ceil(b * ln(2))`.
+See [LMSR_SPEC.md](LMSR_SPEC.md) §1.5 and §8 for the mathematical foundation.
+
+---
+
+## Gas Estimates
+
+| Operation | Estimated Gas | Notes |
+|-----------|--------------|-------|
+| `createMarketFor` (Mode A) | ~250k | EIP-1167 clone + init + register |
+| `createMarketForDelegated` (Mode B) | ~280k | Same + delegation check + recordSpend |
+
+Gas is paid by the relayer. The protocol does not currently reimburse relayer gas from fees.
 
 ---
 
 ## Support
 
-- GitHub Issues: [github.com/MrTalecky/flipcoin](https://github.com/MrTalecky/flipcoin)
+- GitHub Issues: [github.com/flipcoin-fun/flipcoin-protocol](https://github.com/flipcoin-fun/flipcoin-protocol)
 - Discord: TBD
