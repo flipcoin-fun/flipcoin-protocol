@@ -26,6 +26,18 @@
     "./abis/v2": {
       "import": "./dist/abis/v2/index.js",
       "types": "./dist/abis/v2/index.d.ts"
+    },
+    "./math/ammMath": {
+      "import": "./dist/math/ammMath.js",
+      "types": "./dist/math/ammMath.d.ts"
+    },
+    "./math/lmsrMath": {
+      "import": "./dist/math/lmsrMath.js",
+      "types": "./dist/math/lmsrMath.d.ts"
+    },
+    "./types/eip712": {
+      "import": "./dist/types/eip712.js",
+      "types": "./dist/types/eip712.d.ts"
     }
   },
   "files": [
