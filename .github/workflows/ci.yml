@@ -50,8 +50,11 @@ jobs:
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
 
-      - name: Remove submodule test files (incompatible forge-std paths)
-        run: rm -rf contracts/lib/prb-math/test contracts/lib/openzeppelin-contracts/test
+      - name: Remove submodule test/certora files (incompatible paths)
+        run: |
+          rm -rf contracts/lib/prb-math/test
+          rm -rf contracts/lib/openzeppelin-contracts/test
+          rm -rf contracts/lib/openzeppelin-contracts/certora
 
       - name: Run forge build
         run: forge build
