@@ -1,0 +1,63 @@
+{
+  "name": "@flipcoin/sdk",
+  "version": "0.1.0",
+  "description": "TypeScript SDK for FlipCoin prediction markets protocol — math, ABIs, EIP-712 types, and deployment addresses",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./math": {
+      "import": "./dist/math/index.js",
+      "types": "./dist/math/index.d.ts"
+    },
+    "./abis": {
+      "import": "./dist/abis/index.js",
+      "types": "./dist/abis/index.d.ts"
+    },
+    "./abis/v1": {
+      "import": "./dist/abis/v1/index.js",
+      "types": "./dist/abis/v1/index.d.ts"
+    },
+    "./abis/v2": {
+      "import": "./dist/abis/v2/index.js",
+      "types": "./dist/abis/v2/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run build"
+  },
+  "peerDependencies": {
+    "viem": ">=2.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "viem": "^2.45.0",
+    "vitest": "^3.0.0"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/flipcoin-fun/flipcoin-protocol.git",
+    "directory": "packages/sdk"
+  },
+  "keywords": [
+    "flipcoin",
+    "prediction-markets",
+    "lmsr",
+    "eip-712",
+    "base",
+    "evm"
+  ]
+}

@@ -1,0 +1,22 @@
+# Compiler output
+out/
+cache/
+
+# Node
+node_modules/
+packages/sdk/dist/
+packages/sdk/node_modules/
+
+# Environment
+.env
+.env.local
+
+# Broadcast (deployment artifacts)
+broadcast/
+
+# OS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/

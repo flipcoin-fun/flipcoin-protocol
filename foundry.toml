@@ -1,0 +1,27 @@
+[profile.default]
+src = "contracts"
+out = "out"
+libs = ["contracts/lib"]
+test = "test"
+script = "script"
+via_ir = true
+optimizer = true
+optimizer_runs = 1
+
+remappings = [
+    "@openzeppelin/contracts/=contracts/lib/openzeppelin-contracts/contracts/",
+    "forge-std/=contracts/lib/forge-std/src/",
+    "@prb/math/=contracts/lib/prb-math/src/"
+]
+
+[fmt]
+line_length = 100
+tab_width = 4
+bracket_spacing = false
+
+[rpc_endpoints]
+base_sepolia = "${BASE_SEPOLIA_RPC_URL}"
+anvil = "http://127.0.0.1:8545"
+
+[etherscan]
+base_sepolia = { key = "${BASESCAN_API_KEY}", url = "https://api-sepolia.basescan.org/api" }
