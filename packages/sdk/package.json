@@ -1,6 +1,6 @@
 {
   "name": "@flipcoin/sdk",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "TypeScript SDK for FlipCoin prediction markets protocol — math, ABIs, EIP-712 types, and deployment addresses",
   "type": "module",
   "main": "./dist/index.js",

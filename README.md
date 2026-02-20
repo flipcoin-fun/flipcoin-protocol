@@ -1,7 +1,39 @@
-# flipcoin-protocol
+# FlipCoin Protocol
 
-Hybrid CLOB + LMSR prediction market protocol on Base (EVM).
-Collateral: USDC. Routing between CLOB and LMSR backstop is decided by an off-chain matching engine.
+FlipCoin is a hybrid prediction market protocol on Base where humans and autonomous AI agents create and trade markets.
+
+The protocol combines:
+- **Off-chain CLOB** — capital-efficient order matching
+- **On-chain LMSR backstop** — guaranteed liquidity for every market
+- **ERC-1155 YES/NO conditional tokens** — composable outcome positions
+- **EIP-712 intent-based meta-transactions** — agent-native gasless execution
+
+1 winning share = 1 USDC. Always.
+
+## Why Hybrid CLOB + LMSR?
+
+**CLOB provides:**
+- Capital efficiency — makers set their own prices
+- Tight spreads in liquid markets
+- Price-time priority matching
+
+**LMSR provides:**
+- Guaranteed liquidity from block 0 — no bootstrap problem
+- Bounded LP loss (seed funded by market creator)
+- Deterministic settlement (1 share ≤ 1 USDC, enforced on-chain)
+
+Routing between the two is determined by an off-chain matching engine. Three settlement modes: `COMPLEMENTARY` (cross matching), `MINT` (new shares via LMSR), `MERGE` (redeem paired shares).
+
+## Agent-Native Design
+
+FlipCoin is built for autonomous agents:
+- **On-chain delegated session keys** — `DelegationRegistry` with scoped permissions
+- **Rolling daily spend limits** — per-delegate USDC caps enforced on-chain
+- **EIP-712 signed market creation** — `CreateMarket` + `DelegatedCreateMarket` intents
+- **Intent-based trading** — `TradeIntent` (LMSR) and `Order` (CLOB) signed off-chain, settled on-chain
+- **Programmatic access** — Agent API + TypeScript SDK
+
+Creator fees always accrue to the wallet owner, even when markets are created by delegated agents.
 
 ## Architecture
 
@@ -36,9 +68,9 @@ Collateral: USDC. Routing between CLOB and LMSR backstop is decided by an off-ch
 - **Delegation limits** — `DelegationRegistry` enforces per-scope daily USDC caps, market creation caps, and expiry on-chain
 - **Immutable creator fees** — `creatorFeeRecipient` is set once by Factory and cannot be changed; prevents fee redirection attacks
 
-## SDK (WIP)
+## SDK
 
-TypeScript SDK for integrators and bot builders (`packages/sdk/`). Not yet published to npm.
+TypeScript SDK for integrators and bot builders — published as [`@flipcoin/sdk`](https://www.npmjs.com/package/@flipcoin/sdk).
 
 ```typescript
 import { lmsr, ExchangeAbi, getDeploymentsV2 } from "@flipcoin/sdk";
@@ -51,19 +83,23 @@ const sepolia = getDeploymentsV2(84532);  // Base Sepolia
 const mainnet = getDeploymentsV2(8453);   // Base (after launch)
 ```
 
+```bash
+npm install @flipcoin/sdk
+```
+
 ## Development
 
 ```bash
 # Build contracts
 forge build
 
-# Run tests
+# Run tests (336 tests)
 forge test
 
 # SDK
 cd packages/sdk
 npm install
-npm test
+npm test       # 824 tests
 npm run build
 ```
 
