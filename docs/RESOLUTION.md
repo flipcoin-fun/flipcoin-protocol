@@ -1,9 +1,11 @@
 # Market Resolution Mechanism
 
-This document describes the process of determining the outcome of a prediction market in the Flipcoin system.
+> Resolution lifecycle for FlipCoin prediction markets.
+> For the full ShareToken contract specification, see [HYBRID_SPEC_v5.md](HYBRID_SPEC_v5.md) §3 and §10.
 
 **Scope:** dev / sandbox mode.
-The mechanism described herein is used exclusively for testing and development purposes.
+The mechanism described herein is used for testing and development.
+Production will require decentralized resolution (oracle network, bonded disputes, etc.).
 
 ---
 
@@ -12,376 +14,358 @@ The mechanism described herein is used exclusively for testing and development p
 Each market progresses through the following stages:
 
 1. **Trading** — users buy and sell YES/NO positions
-2. **Deadline** — trading is automatically halted
-3. **Resolution** — the administrator determines the outcome
-4. **Challenge** — users may submit evidence to dispute the outcome
-5. **Finalization** — the outcome is permanently locked
+2. **Deadline** — trading deadline reached, market awaits resolution
+3. **Resolution Proposal** — the oracle proposes an outcome
+4. **Dispute Period** — shareholders may dispute the proposed outcome
+5. **Finalization** — the outcome is permanently locked, CLOB paused
 6. **Redemption** — holders of winning positions receive their payout
 
 ---
 
-## Resolution Lifecycle
+## State Machine
+
+### On-chain States (ShareToken.ResolutionStatus)
+
+The ShareToken contract defines exactly three resolution states:
+
+```solidity
+enum ResolutionStatus { Open, Pending, Resolved }
+```
+
+The **logical lifecycle** maps to these states as follows:
+
+| Logical Phase | ResolutionStatus | Trading | Description |
+|---------------|-----------------|---------|-------------|
+| Trading active | Open | Allowed | Normal trading |
+| Past deadline, awaiting resolution | Open | Allowed (no on-chain halt) | Oracle should propose |
+| Resolution proposed, dispute period | Pending | Blocked (conditionPaused) | 24h dispute window |
+| Outcome finalized | Resolved | Blocked permanently | Redemption enabled |
+
+> **Note**: There is no separate `TradingClosed` or `Invalid` state on-chain.
+> `Invalid` is an outcome (`Outcome.Invalid`), not a status.
+> Trading halt past deadline is enforced by the CLOB engine (offchain) and by
+> `conditionPaused` after resolution proposal.
+
+### State Diagram
+
+```
+                  proposeResolution(outcome)
+    Open ──────────────────────────────────► Pending
+     │                                          │
+     │                                          ├── disputeResolution()
+     │                                          │   → resets to Open
+     │                                          │
+     │                                          └── finalizeResolution()
+     │                                              (after 24h, by anyone)
+     │                                              → Resolved
+     │                                              → exchange.pauseCondition() [FINAL]
+     │
+     └── markAsInvalid()
+         (deadline + 6h, status must be Open)
+         → Resolved (outcome = Invalid)
+         → exchange.pauseCondition() [FINAL]
+```
+
+### Transitions
+
+| From | To | Trigger | Caller |
+|------|----|---------|--------|
+| Open | Pending | `proposeResolution(outcome)` | Oracle only, after deadline |
+| Pending | Open | `disputeResolution()` | Any shareholder, during 24h window |
+| Pending | Resolved | `finalizeResolution()` | Anyone, after 24h window expires |
+| Open | Resolved | `markAsInvalid()` | Anyone, after deadline + 6h |
+
+---
+
+## Resolution Flow
 
 ### 1. End of Trading
 
 When the market's `deadline` is reached:
-- All trading functions (`buyYes`, `buyNo`, `sellYes`, `sellNo`) are disabled
-- The pool state is frozen
-- The resolution window begins
+- The CLOB matching engine stops accepting new orders for this condition
+- LMSR backstop trades are no longer routed by the engine
+- On-chain: the market remains in `Open` status until resolution is proposed
 
-**State transition:**
-```
-Open -> TradingClosed
-```
+> **pauseCondition integration**: `exchange.pauseCondition(conditionId)` is called
+> as a side effect of both `finalizeResolution()` and `markAsInvalid()`. Once paused,
+> the condition is **never unpaused** — CLOB settlement is permanently disabled.
+> Before finalization, the engine enforces the trading halt offchain.
 
-### 2. Administrator Resolution Window
+### 2. Oracle Resolution Window
 
-**Duration:** 6 hours after the deadline
+**Duration:** 6 hours after the deadline (`ADMIN_RESOLVE_WINDOW`)
 
-During this window the protocol administrator:
+During this window the oracle (admin in dev mode):
 - Analyzes information sources
 - Determines the actual outcome of the event
-- Calls `proposeResolve(outcome, evidenceURI, evidenceHash)`
-
-**Call parameters:**
-- `outcome` — the result: `Yes`, `No`, or `Invalid`
-- `evidenceURI` — link to evidence (public URL)
-- `evidenceHash` — keccak256 hash of the evidence pack
+- Calls `proposeResolution(conditionId, outcome)`
 
 **State transition:**
 ```
-TradingClosed -> ResolutionProposed
+Open → Pending
 ```
 
-If the administrator does not propose a resolution within 6 hours, the market automatically transitions to the `Invalid` state (see the "Unresolved Markets" section).
+**Guards:**
+```solidity
+require(resolutions[conditionId].status == Open, "not open");
+require(block.timestamp > conditions[conditionId].deadline, "deadline not reached");
+```
 
-### 3. Challenge Window
+> **Cannot propose twice**: `proposeResolution` requires `status == Open`.
+> If the oracle wants to change their proposal, the previous proposal must first
+> be disputed (reset to Open) before a new proposal can be submitted.
 
-**Duration:** 1 hour after the resolution is proposed
+### 3. Dispute Period
 
-During this window any user may:
-- Review the proposed outcome and evidence
-- Submit a challenge with alternative evidence
-- Call `submitChallenge(alternativeOutcome, evidenceURI, evidenceHash, comment)`
+**Duration:** 24 hours after proposal (`DISPUTE_PERIOD`)
 
-**Call parameters:**
-- `alternativeOutcome` — the proposed alternative outcome
-- `evidenceURI` — link to alternative evidence
-- `evidenceHash` — keccak256 hash of the evidence pack
-- `comment` — brief rationale (up to 500 characters)
+During this window any **shareholder** (holder of YES or NO tokens) may:
+- Review the proposed outcome
+- Call `disputeResolution(conditionId)` to contest
+
+**Effects of dispute:**
+- Status resets to `Open`
+- The oracle must re-investigate and propose again
+- No limit on the number of dispute cycles
 
 **Important:**
-- A challenge does NOT change the outcome automatically
-- A challenge is only recorded on-chain for review
-- There is no limit on the number of challenges
+- Only shareholders can dispute (skin in the game)
+- Disputes are free (no bond required in dev mode)
+- A dispute does NOT propose an alternative — it simply rejects and resets
+- Disputes do NOT extend the window — the 24h is fixed from proposal time
 
-**State transition:**
-```
-ResolutionProposed -> ResolutionProposed (state unchanged)
+**Guards:**
+```solidity
+require(resolutions[conditionId].status == Pending, "not pending");
+require(block.timestamp <= resolutions[conditionId].proposedAt + DISPUTE_PERIOD, "window closed");
+// Shareholder check:
+require(
+    shareToken.balanceOf(msg.sender, yesTokenId) > 0 ||
+    shareToken.balanceOf(msg.sender, noTokenId) > 0,
+    "not shareholder"
+);
 ```
 
 ### 4. Finalization
 
-After the challenge window closes, the administrator:
-- Reviews all submitted challenges
-- Makes the final decision
-- Calls `finalizeResolve(finalOutcome)`
+After the dispute window closes (24h elapsed with no dispute), **anyone** may call
+`finalizeResolution(conditionId)`.
 
-**Possible decisions:**
-- Confirm the original outcome
-- Change the outcome based on challenges
-- Declare the market invalid (`Invalid`)
-
-**State transition:**
+**Effects:**
 ```
-ResolutionProposed -> Resolved
+1. status = Resolved
+2. finalOutcome = proposedOutcome
+3. payoutPerShare = PAYOUT_PER_SHARE (1_000_000 = $1 for Yes/No)
+4. exchange.pauseCondition(conditionId) — CLOB permanently disabled
+5. emit ResolutionFinalized(conditionId, outcome, payoutPerShare)
+```
+
+**Guards:**
+```solidity
+require(resolutions[conditionId].status == Pending, "not pending");
+require(block.timestamp > resolutions[conditionId].proposedAt + DISPUTE_PERIOD, "too early");
 ```
 
 After finalization:
-- The outcome becomes immutable
-- `payoutPerShare` is calculated
-- The `redeem()` function is activated
+- The outcome is **immutable** — no further changes possible
+- `redeemPositions()` becomes available
+- `exchange.pauseCondition()` prevents any CLOB settlement
 
-### 5. Redemption (Redeem)
+### 5. Redemption
 
-Holders of winning positions call `redeem()`:
-- If the outcome is `Yes` — payout goes to YES token holders
-- If the outcome is `No` — payout goes to NO token holders
-- If the outcome is `Invalid` — proportional refund to all participants
+Holders of winning positions call `ShareToken.redeemPositions(conditionId)`:
+
+| Outcome | Who redeems | Payout per share |
+|---------|-------------|------------------|
+| Yes | YES token holders | $1.00 (1_000_000) |
+| No | NO token holders | $1.00 (1_000_000) |
+| Invalid | ALL token holders (YES + NO) | $0.50 (500_000) — hardcoded |
+
+**Invalid payout rationale:**
+Since `yesSupply == noSupply` (split/merge invariant), paying $0.50 per share
+means each holder of a YES+NO pair receives exactly $1.00 (full refund).
+A holder of only YES (or only NO) receives $0.50 — proportional to their exposure.
+
+The $0.50 payout is **hardcoded** (not calculated from pool balance) for simplicity,
+no rounding issues, and no oracle dependency. The `splitReserve` in the Vault always
+covers this: `totalYesSupply * 500K + totalNoSupply * 500K = splitReserve`.
+
+See [LMSR_SPEC.md](LMSR_SPEC.md) §2.3 and [HYBRID_SPEC_v5.md](HYBRID_SPEC_v5.md) §3.1.
 
 ---
 
-## Unresolved Markets (Invalid)
+## Unresolved Markets (markAsInvalid)
 
-If the administrator **does not propose an outcome** within the resolution window
-(Admin Resolve Window) after the market deadline, the market is considered
-unresolved and is automatically transitioned to the **Invalid** state.
+If the oracle **does not propose any outcome** within 6 hours after the deadline,
+the market becomes eligible for `Invalid` resolution.
 
-### Conditions
-
-A market is declared `Invalid` when all of the following conditions are met:
-- The market deadline has passed
-- The administrator resolution window has expired (6 hours)
-- The administrator has not called `proposeResolve()` (YES or NO)
-
-### Consequences
-
-In the case of `Invalid`:
-- The market is finalized without selecting a YES or NO outcome
-- Further resolution is no longer possible
-- Payouts follow the `Invalid` rules:
-  - All positions (YES and NO) are eligible for payout
-  - Each user receives a proportional share of the pool
-- Users bear no risk from administrator inaction
-
-### Automatic Transition
-
-Any user may call `markAsInvalid()` after the resolution window has expired:
+### Preconditions (ALL must be true)
 
 ```solidity
-function markAsInvalid() external {
-    require(status == MarketStatus.TradingClosed, "not in TradingClosed");
-    require(block.timestamp > deadline + ADMIN_RESOLVE_WINDOW, "resolve window not expired");
-
-    status = MarketStatus.Resolved;
-    outcome = Outcome.Invalid;
-    // ... calculate payoutPerShare for Invalid
-}
+require(resolutions[conditionId].status == Open, "not open");
+require(block.timestamp > conditions[conditionId].deadline + ADMIN_RESOLVE_WINDOW, "window not expired");
+require(conditions[conditionId].prepared == true, "not prepared");
 ```
 
-### Note
+### Why status == Open only
 
-The `Invalid` state serves as a safety valve in case a market is not properly
-resolved due to administrative reasons. This rule is in effect in dev / sandbox
-mode and is explicitly documented.
+`markAsInvalid` is a safety valve for **oracle inactivity only**. If the oracle
+has already proposed a resolution (`status == Pending`), the dispute period
+mechanism handles the outcome. `markAsInvalid` cannot be used to bypass an
+active proposal.
+
+### Who can call
+
+**Anyone.** This is a permissionless safety valve, not a privileged function.
+The function does not "automatically" trigger — a user must explicitly call it.
+
+### Effects
+
+```
+1. status = Resolved (skips Pending — no dispute period needed)
+2. finalOutcome = Invalid
+3. payoutPerShare = 500_000 ($0.50, hardcoded)
+4. exchange.pauseCondition(conditionId) — CLOB permanently disabled
+5. emit MarkedAsInvalid(conditionId, msg.sender, block.timestamp)
+6. emit ResolutionFinalized(conditionId, Invalid, 500_000)
+```
+
+### Finality
+
+**Irreversible.** No un-invalid path. No dispute period.
+Once `markAsInvalid` executes, the market is permanently resolved as Invalid.
 
 ---
 
-## State Diagram
+## Evidence (dev mode)
+
+In dev mode, resolution evidence is submitted offchain and stored in the database.
+The admin provides a `resolutionReason` text when proposing resolution via the UI.
+
+For future production use, an on-chain evidence commitment scheme is planned:
 
 ```
-+------+    deadline    +---------------+
-| Open | ------------> | TradingClosed |
-+------+                +---------------+
-                              |
-              +---------------+---------------+
-              |                               |
-              | proposeResolve()              | 6h timeout (no resolve)
-              v                               v
-    +--------------------+              +-----------+
-    | ResolutionProposed |<----+        | Invalid   |---> redeem()
-    +--------------------+     |        +-----------+
-              |                |
-              |                | submitChallenge()
-              +----------------+
-              |
-              | 1h window ends + finalizeResolve()
-              v
-        +----------+
-        | Resolved |---> redeem()
-        +----------+
+evidenceHash = keccak256(bytes(evidenceURI))
 ```
 
-**Transitions:**
-- `Open` -> `TradingClosed`: automatically when the deadline is reached
-- `TradingClosed` -> `ResolutionProposed`: administrator calls `proposeResolve()`
-- `TradingClosed` -> `Invalid`: 6 hours elapsed without resolution; anyone may call `markAsInvalid()`
-- `ResolutionProposed` -> `Resolved`: administrator calls `finalizeResolve()` after the challenge window
-- `Resolved` / `Invalid` -> users may call `redeem()`
+Where `evidenceURI` is a stable URL pointing to the evidence document.
+
+> **Note**: Using `keccak256(abi.encodePacked(jsonString))` is not recommended
+> because JSON serialization is not canonical — whitespace and field ordering
+> differences produce different hashes. Use `keccak256(bytes(uri))` instead,
+> committing to the URI rather than the content.
 
 ---
 
-## Evidence Pack
-
-The `evidenceHash` is computed from a JSON document with the following structure:
-
-```json
-{
-  "version": "1.0",
-  "marketAddress": "0x...",
-  "proposedOutcome": "Yes",
-  "timestamp": "2024-01-15T14:30:00Z",
-  "sources": [
-    {
-      "url": "https://example.com/official-announcement",
-      "type": "official",
-      "archived": "https://web.archive.org/web/..."
-    },
-    {
-      "url": "https://twitter.com/...",
-      "type": "social",
-      "archived": null
-    }
-  ],
-  "rationale": "Brief rationale for the decision based on the provided sources.",
-  "resolverAddress": "0x..."
-}
-```
-
-**Fields:**
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `version` | string | yes | Schema version |
-| `marketAddress` | address | yes | Market contract address |
-| `proposedOutcome` | enum | yes | `Yes`, `No`, or `Invalid` |
-| `timestamp` | ISO 8601 | yes | Pack creation time (UTC) |
-| `sources` | array | yes | List of sources (minimum 1) |
-| `sources[].url` | string | yes | Public link |
-| `sources[].type` | string | yes | `official`, `social`, `news`, `other` |
-| `sources[].archived` | string | no | Link to an archived copy |
-| `rationale` | string | yes | Rationale (up to 1000 characters) |
-| `resolverAddress` | address | yes | Caller address |
-
-**Hash computation:**
-```solidity
-evidenceHash = keccak256(abi.encodePacked(jsonString))
-```
-
----
-
-## Accepted Sources
-
-### Source Priority (highest to lowest)
-
-1. **Official sources**
-   - Official organization websites
-   - Press releases
-   - Government registries
-   - APIs with verified data
-
-2. **Authoritative media**
-   - Major news agencies (Reuters, AP, Bloomberg)
-   - Specialized industry publications
-
-3. **Social media**
-   - Verified accounts
-   - Official organization pages
-
-4. **Secondary sources**
-   - Wikipedia (supplementary only)
-   - Data aggregators
-
-### Source Requirements
-
-- The source must be publicly accessible
-- Attaching an archived copy is recommended (Archive.org, Archive.today)
-- The source must explicitly support the claimed outcome
-- In case of conflicting sources, official sources take precedence
-
----
-
-## Contract Interface
+## On-chain Interface (ShareToken)
 
 ### Resolution Functions
 
 ```solidity
-// Administrator proposes a resolution
-function proposeResolve(
-    Outcome outcome,
-    string calldata evidenceURI,
-    bytes32 evidenceHash
-) external onlyAdmin;
+// Oracle proposes a resolution (after deadline)
+function proposeResolution(bytes32 conditionId, Outcome outcome)
+    external; // onlyOracle
 
-// User submits a challenge
-function submitChallenge(
-    Outcome alternativeOutcome,
-    string calldata evidenceURI,
-    bytes32 evidenceHash,
-    string calldata comment
-) external;
+// Shareholder disputes during DISPUTE_PERIOD
+function disputeResolution(bytes32 conditionId)
+    external; // onlyShareholder
 
-// Administrator finalizes the resolution
-function finalizeResolve(Outcome finalOutcome) external onlyAdmin;
+// Anyone finalizes after DISPUTE_PERIOD expires
+function finalizeResolution(bytes32 conditionId)
+    external; // anyone
 
-// User redeems winnings
-function redeem() external returns (uint256 payout);
+// Anyone marks as invalid after deadline + ADMIN_RESOLVE_WINDOW (status must be Open)
+function markAsInvalid(bytes32 conditionId)
+    external; // anyone, permissionless
+
+// Holder redeems winning positions
+function redeemPositions(bytes32 conditionId)
+    external; // anyone with tokens
 ```
 
 ### Events
 
 ```solidity
 event ResolutionProposed(
-    Outcome indexed outcome,
-    string evidenceURI,
-    bytes32 evidenceHash,
-    uint64 challengeWindowEnds
+    bytes32 indexed conditionId,
+    Outcome outcome,
+    uint64 proposedAt,
+    uint64 finalizeAfter
 );
 
-event ChallengeSubmitted(
+event ResolutionDisputed(
+    bytes32 indexed conditionId,
     address indexed challenger,
-    Outcome alternativeOutcome,
-    string evidenceURI,
-    bytes32 evidenceHash,
-    string comment
+    Outcome proposedOutcome
 );
 
-event MarketFinalized(
-    Outcome indexed finalOutcome,
-    uint256 payoutPerShare,
-    uint256 totalChallenges
+event ResolutionFinalized(
+    bytes32 indexed conditionId,
+    Outcome outcome,
+    uint256 payoutPerShare
+);
+
+event MarkedAsInvalid(
+    bytes32 indexed conditionId,
+    address indexed caller,
+    uint64 markedAt
+);
+
+event PositionRedeemed(
+    bytes32 indexed conditionId,
+    address indexed user,
+    uint256 sharesBurned,
+    uint256 usdcPayout
 );
 ```
 
 ### Time Constants
 
 ```solidity
+uint64 public constant DISPUTE_PERIOD = 24 hours;
 uint64 public constant ADMIN_RESOLVE_WINDOW = 6 hours;
-uint64 public constant CHALLENGE_WINDOW = 1 hours;
 ```
 
 ---
 
-## Administrator Role
+## Oracle / Admin Role
 
-### Authorities
+### Dev Mode: Centralized Admin
 
+In dev/sandbox mode, the oracle is a single administrator address.
+
+**Authorities:**
 - Propose a resolution after the deadline
-- Review challenges
-- Make the final decision
-- Change the outcome based on new evidence
+- Re-propose after a dispute resets to Open
 
-### Restrictions
-
-- Cannot resolve before the deadline is reached
-- Cannot finalize before the challenge window closes
+**Restrictions:**
+- Cannot resolve before the deadline
+- Cannot bypass the dispute period (24h is mandatory)
 - Cannot change the outcome after finalization
-- Must provide evidence
+- Cannot call `markAsInvalid` (it's permissionless but requires `status == Open`)
+
+**Admin address is set at deployment and cannot be changed** for the lifetime
+of a ShareToken instance. This prevents admin replacement before resolution.
 
 ### Transparency
 
-All administrator actions are:
-- Recorded on the blockchain
-- Accompanied by links to evidence
-- Available for public audit
+All resolution actions are:
+- Recorded on the blockchain (events)
+- Indexed by the protocol indexer
+- Visible in the admin dashboard and market detail pages
 
----
+### Centralization Disclosure
 
-## UI Requirements (dev mode)
+When a market is created, the user is explicitly informed:
 
-### Displaying the Proposed Resolution
+> This market is resolved by the protocol administrator.
+> The administrator is the final arbiter during the dispute period.
+> All decisions are recorded on-chain and publicly auditable.
 
-When the market transitions to the `ResolutionProposed` state, the UI must display:
-- The proposed outcome (YES / NO / INVALID)
-- A link to the evidence
-- Remaining time in the challenge window
-- A button to submit a challenge
-
-### Displaying Challenges
-
-A list of all submitted challenges showing:
-- Challenger address (truncated)
-- Alternative outcome
-- Link to evidence
-- Comment
-- Submission time
-
-### Displaying Finalization
-
-After finalization:
-- Final outcome (prominently displayed)
-- Whether the outcome was changed
-- Number of challenges reviewed
-- Redeem button (if the user holds a winning position)
+This information is displayed:
+- On the market creation page
+- On the market card
+- In the modal before the first trade
 
 ---
 
@@ -389,37 +373,15 @@ After finalization:
 
 This resolution mechanism:
 
-1. **Is used only in dev/sandbox mode**
-   - Not intended for production
-   - Serves for logic testing
+1. **Is centralized** — a single admin makes decisions; no oracle network
+2. **Has no bonding** — disputes are free; no penalties for frivolous disputes
+3. **Has no incentive alignment** — no staking, no slashing, no reputation
+4. **Disputes do not extend the window** — a challenge at minute 1439 of 1440 gives
+   the oracle only 1 minute to review (acceptable in dev mode)
+5. **Requires trust** — users must trust the admin to act honestly
 
-2. **Is centralized**
-   - A single administrator makes decisions
-   - There is no voting mechanism
-   - There are no economic incentives for honesty
-
-3. **Has no bonding system**
-   - Challenges are free
-   - There are no penalties for false challenges
-
-4. **Requires trust**
-   - Users must trust the administrator
-   - This is explicitly documented
-
----
-
-## Disclosure
-
-When a market is created, the user is explicitly informed:
-
-> This market is resolved by the protocol administrator.
-> The administrator is the final arbiter.
-> All decisions and evidence are public.
-
-This information is displayed:
-- On the market creation page
-- On the market card
-- In the modal dialog before the first purchase
+These limitations are explicitly documented and acceptable for dev/sandbox mode.
+Production resolution will require decentralized mechanisms.
 
 ---
 
@@ -427,5 +389,6 @@ This information is displayed:
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 2.0 | 2025-02 | Rewrite: sync with v5.2 ShareToken states, 24h dispute period, hardcoded Invalid payout, pauseCondition integration |
 | 1.1 | 2024-02 | Added "Unresolved Markets (Invalid)" section |
 | 1.0 | 2024-02 | Initial version for dev mode |
