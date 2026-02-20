@@ -1,212 +1,185 @@
 # LMSR AMM Specification
 
-> This document describes the evolution of the AMM from the current CPMM (v1) to LMSR (v2).
+> Mathematical foundations and economic model for the LMSR (Logarithmic Market Scoring Rule)
+> backstop AMM used in FlipCoin v2. For contract interfaces and integration details,
+> see [HYBRID_SPEC_v5.md](HYBRID_SPEC_v5.md) §6–§8.
 
 ---
 
-## 0. Current Problem (CPMM v1) — Critical Analysis
+## 0. Motivation: Limitations of CPMM Under Low Seed
 
-### 0.1 Problem Description
+### 0.1 Problem
 
-With low initial liquidity ($10-50), CPMM produces extreme slippage:
-- User invests $60 into a market with $10 liquidity
-- Receives ~15 shares due to price impact
-- Even when winning, receives only $15 (a $45 loss)
+In FlipCoin v1, the CPMM (constant product market maker) produces extreme slippage with small
+seed capital ($10–$50). A user investing $60 into a $10-seeded market receives ~15 shares;
+even when winning, the payout is only $15 — a $45 loss.
 
-### 0.2 Architectural Contradictions in the Current Market.sol
+This is a mathematical property of constant-product AMMs, not a bug:
+with small reserves, price impact is extreme.
 
-**Problem 1: Creator receives shares on both sides**
+### 0.2 Root Causes (specific to FlipCoin v1 implementation)
 
-```solidity
-// In initialize():
-yesSharesTotal = seedUsdc;
+**1. Creator receives shares on both sides at initialization**
+
+```
+yesSharesTotal = seedUsdc;   // creator's initial issuance
 noSharesTotal = seedUsdc;
 yesShares[creator] = seedUsdc;
 noShares[creator] = seedUsdc;
 ```
 
-Consequences:
-1. `winningSharesTotal` always includes the creator's large initial issuance
-2. `payoutPerShare = usdcPool / winningSharesTotal` will be approximately 0.5-1.0 even without traders
-3. A trader buying a rare outcome shares the pool with the massive initial issuance, resulting in low returns
+The creator's large initial position dilutes all subsequent traders.
+On resolution, `payoutPerShare = usdcPool / winningSharesTotal` is low
+because `winningSharesTotal` includes the creator's shares.
 
-**Example:**
-```
-seed = $100
-yesSharesTotal = 100 (creator's)
-Trader buys 10 YES shares for $60
+**2. CPMM pricing mixed with pari-mutuel settlement**
 
-On YES resolution:
-- winningSharesTotal = 110 (100 creator + 10 trader)
-- usdcPool = 100 + 60 - fees ≈ $157
-- payoutPerShare = 157 / 110 ≈ $1.43
+CPMM implies "1 share ≈ $1 on win" (marginal pricing), but pari-mutuel
+settlement computes `payoutPerShare = usdcPool / totalShares`. These models
+are incompatible: the CPMM purchase price has no relation to the actual payout.
 
-Trader receives: 10 * 1.43 = $14.30 (invested $60, loss of $45.70!)
-```
+### 0.3 Why LMSR
 
-**Problem 2: Mixing CPMM pricing with pari-mutuel settlement**
-
-CPMM:
-- Price is determined by reserves: `priceYes = noReserve / (yes + no)`
-- Shares are "purchased" at marginal price
-
-Pari-mutuel:
-- `payoutPerShare = usdcPool / winningSharesTotal`
-- All winners split the total pool
-
-These models are incompatible:
-- CPMM implies: "1 share = $1 on win"
-- Pari-mutuel says: "1 share = usdcPool/totalShares"
-
-### 0.3 Why CPMM Cannot Solve the "Invested 60 → Received 15" Problem
-
-This is a **mathematical property** of constant-product AMMs with small seeds:
-- With seed = $10 and a $60 purchase, the price impact is extreme
-- CPMM protects the **pool**, not the user
-- No amount of maxPriceImpact or maxTradeAmount tuning will fully solve this
-
-### 0.4 Possible Fixes for MVP (Without Migrating to LMSR)
-
-**Option A: Virtual Liquidity (recommended)**
-
-```solidity
-// DO NOT mint shares to creator
-function initialize(uint256 seedUsdc) external onlyFactory {
-    yesReserve = seedUsdc;    // virtual reserves for pricing
-    noReserve = seedUsdc;
-    k = seedUsdc * seedUsdc;
-
-    // DO NOT create shares — this is virtual liquidity only
-    yesSharesTotal = 0;       // start at 0
-    noSharesTotal = 0;
-
-    usdcPool = seedUsdc;      // real collateral
-    creatorSeedDeposit = seedUsdc;  // separate tracking for refund
-
-    initialized = true;
-}
-```
-
-Creator receives the seed back at resolution (minus AMM losses).
-
-**Option B: Fixed Payout (Polymarket-style)**
-
-```solidity
-// Each share pays EXACTLY $1 on win
-payoutPerShare = 1e6;  // fixed at $1
-
-// On resolution, verify:
-require(usdcPool >= winningSharesTotal, "insufficient collateral");
-```
-
-However, this requires a different AMM model (order book or LMSR).
-
-**Option C: Increase the Minimum Seed**
-
-A brute-force solution — require seed >= $500-1000 so that slippage remains acceptable.
+LMSR solves both problems:
+1. **Fixed payout**: each winning share pays exactly $1 (no pari-mutuel)
+2. **Bounded loss**: the creator knows max loss upfront: `b * ln(2)`
+3. **No initial token issuance**: seed funds the backstop, not the creator's position
+4. **Logarithmic slippage**: predictable, not exponential
 
 ---
 
-## 1. Solution: LMSR (Phase 2)
+## 1. LMSR Mathematics
 
-### 1.1 Why LMSR
+### 1.1 Cost Function
 
-LMSR solves both problems:
-1. **Bounded loss** — the creator knows the maximum loss upfront: `max_loss = b * ln(2)`
-2. **Shares = probability** — each share pays exactly $1 on win (no pari-mutuel mixing)
-3. **Predictable slippage** — logarithmic, not exponential
-
-### 1.2 LMSR Mathematics
-
-**Cost Function:**
 ```
-C(q_yes, q_no) = b * ln(e^(q_yes/b) + e^(q_no/b))
+C(qYes, qNo) = b * ln(e^(qYes/b) + e^(qNo/b))
 ```
 
 Where:
-- `q_yes` — quantity of YES shares sold
-- `q_no` — quantity of NO shares sold
-- `b` — liquidity parameter
-- `C` — total cost of all shares sold
+- `qYes`, `qNo` — cumulative shares sold per side (SD59x18, signed)
+- `b` — liquidity parameter (SD59x18, controls market depth)
+- `C` — total cost of all shares sold (in USDC after conversion)
 
-**Purchase Cost:**
-```
-cost = C(q_yes + delta, q_no) - C(q_yes, q_no)
-```
+### 1.2 Purchase Cost
 
-**Price (Probability) via Sigmoid:**
 ```
-P(yes) = 1 / (1 + e^(-(q_yes - q_no)/b))
-P(no) = 1 - P(yes)
+cost(delta) = C(qYes + delta, qNo) - C(qYes, qNo)
 ```
 
-### 1.3 LMSR vs CPMM Comparison
+To buy `delta` YES shares, the user pays `cost(delta)` USDC.
 
-| Property | CPMM (current) | LMSR |
-|----------|----------------|------|
-| Slippage | Exponential | Logarithmic |
-| Max loss for LP | Unbounded | Bounded: `b * ln(2)` |
-| Payout per share | Variable (pari-mutuel) | Fixed $1 |
-| Predictability | Low | High |
-| Price always 0-100% | No (asymptotic) | Yes |
+### 1.3 Price (Sigmoid)
 
-### 1.4 The `b` Parameter (Liquidity)
+```
+P(yes) = 1 / (1 + e^(-(qYes - qNo) / b))
+P(no)  = 1 - P(yes)
+```
 
-`b` controls the market "depth":
-- **Small b** ($10-50) — high price sensitivity
-- **Large b** ($1000+) — stable price, requires large trades to move
+Price is always in (0, 1). In basis points: 1–9999.
 
-**Maximum market maker loss:**
+### 1.4 Units Convention
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│ USDC:     1 USDC = 1_000_000 (6 decimals)                        │
+│ Shares:   1 share = 1_000_000 (6 decimals, $1 face value)        │
+│ q values: SD59x18 = shares * SCALE_6_TO_18                       │
+│           1 share (1e6) → deltaQ = 1e6 * 1e12 = 1e18 (1.0 SD)   │
+│ b:        SD59x18 (e.g. 100e18 = $100 liquidity depth)           │
+│ Price:    basis points, 1–9999 (5000 = $0.50)                    │
+│                                                                    │
+│ SCALE_6_TO_18 = 1e12  (converts 6-decimal values to 18-decimal)  │
+│                                                                    │
+│ Invariant: 1 winning share always redeems for exactly 1 USDC     │
+│            (1_000_000 units → 1_000_000 units)                    │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+### 1.5 The `b` Parameter
+
+`b` controls market depth:
+- Small `b` ($10–$50): high price sensitivity, low max loss
+- Large `b` ($1000+): stable price, requires large trades to move
+
+Maximum market maker loss:
 ```
 max_loss = b * ln(2) ≈ 0.693 * b
 ```
 
 Example: `b = $100` → max loss ≈ $69.3
 
+### 1.6 LMSR vs CPMM Comparison
+
+| Property | CPMM (v1) | LMSR (v2) |
+|----------|-----------|-----------|
+| Slippage | Exponential | Logarithmic |
+| Max loss for seed provider | Unbounded | Bounded: `b * ln(2)` |
+| Payout per share | Variable (pari-mutuel) | Fixed $1 |
+| Initial token issuance | Minted to creator | None |
+| Price range | Asymptotic to 0/1 | Always (0, 1) strictly |
+
 ---
 
 ## 2. Economic Model
 
-### 2.1 Who Bears the Max Loss?
+### 2.1 Seed as Backstop Collateral
 
-The **market creator** acts as the market maker:
-- Deposits `seedUsdc` when creating the market
-- This deposit covers the potential LMSR loss
+The market creator deposits `seedUsdc` when creating the market.
+This seed funds the LMSR backstop — it is real collateral locked in the Vault,
+not "virtual liquidity."
 
-**Minimum deposit:**
+No initial outcome tokens are minted to the creator. Token supply starts at 0.
+The seed covers the worst-case LMSR loss.
+
+**Minimum seed:**
 ```
 seedUsdc >= b * ln(2) ≈ 0.693 * b
 ```
 
-> **Important:** NOT `seedUsdc >= b` (that would overestimate the requirement by 44%)
+> **Note**: NOT `seedUsdc >= b` (that would overestimate the requirement by 44%).
 
-### 2.2 Primary Economic Invariant (via baseCost)
+### 2.2 Cost Invariant (via baseCost)
 
 ```
-vaultBalance(market) >= C(qYes, qNo) - baseCost
+effectiveCollateral >= C(qYes, qNo) - baseCost
 ```
 
 Where:
-- `vaultBalance(market)` = `IVault(vault).balanceOf(market)` — the market's balance in the Vault ledger
-- `C(qYes, qNo)` — current LMSR cost
-- `baseCost` = `C(qYes0, qNo0)` — cost at initialization (with initial bias)
+- `effectiveCollateral` = market's available USDC in Vault (excluding accumulated fees)
+- `C(qYes, qNo)` = current LMSR cost
+- `baseCost` = `C(qYes0, qNo0)` = cost at initialization (with initial price bias)
 
-**Why baseCost instead of C(0,0)?**
+**Why baseCost instead of C(0, 0)?**
 
-With initial bias (starting price != 50%), the initial `qYes0` and `qNo0` are non-zero.
-- `C(0, 0) = b * ln(2)` — this is only the special case for 50/50
-- `baseCost = C(qYes0, qNo0)` — universal baseline for any initial price
+With initial price bias (starting price ≠ 50%), the initial `qYes0` and `qNo0` are non-zero.
+`C(0, 0) = b * ln(2)` is only the special case for 50/50. `baseCost` is the universal
+baseline for any initial price.
 
-### 2.3 Collateralization
+### 2.3 Collateralization (v2 Model)
 
-Unlike CPMM/pari-mutuel, LMSR guarantees:
-- Each YES share pays exactly $1 if YES wins
-- Each NO share pays exactly $1 if NO wins
+In v2, shares are ERC-1155 tokens managed by ShareToken. Collateral is tracked
+in the Vault via three separate buckets (see HYBRID_SPEC §8):
 
-**Invariant:**
 ```
-vaultBalance(market) >= max(yesSharesTotal, noSharesTotal)
+Vault.splitReserve   — USDC backing outstanding YES+NO token pairs
+Vault.balances[addr] — per-address ledger balances
+Vault.feePool        — accumulated protocol + creator fees
 ```
+
+The global invariant:
+```
+USDC.balanceOf(vault) >= totalBalances + splitReserve + feePool
+```
+
+For the LMSR specifically, the cost invariant ensures that the market's
+Vault balance plus splitReserve always covers the maximum payout liability.
+
+**Pre-resolution**: `splitReserve` covers all minted token pairs at $1 per pair.
+Since `yesSupply == noSupply` (split/merge invariant), max payout = max(yesSupply, noSupply) = yesSupply.
+
+**Post-resolution**: winning tokens redeem via `ShareToken.redeemPositions()`.
+Vault releases from `splitReserve` to the redeemer. See HYBRID_SPEC §3 and §10.
 
 ### 2.4 Max Loss Scenario
 
@@ -216,615 +189,371 @@ b = $100, seed = $70 (covers max_loss of $69.3)
 
 Traders buy YES en masse:
 - qYes increases, price → 99%
-- Creator receives their USDC into the pool
+- Each buy: user pays USDC → Vault → splitPosition mints YES+NO pair
+- LMSR inventory accumulates NO tokens, sells YES to buyer
 
 Market resolves as YES:
-- All YES shares pay $1
-- Creator covers the difference from the seed
+- All YES holders redeem $1 per share via ShareToken
+- LMSR's NO inventory is worthless
+- Creator's seed covered the LMSR loss
 
 Result for creator:
-- Maximum loss = $69.3 (if everyone bought YES)
+- Maximum loss = $69.3 (if all capital flows to YES)
 - Seed covered the loss
+- After resolution: creator withdraws remaining seed + accumulated fees
 ```
 
 ---
 
-## 3. Vault Integration
+## 3. v2 Integration: ERC-1155 Inventory Model
 
-### 3.1 Architecture (per VAULT.md)
+### 3.1 Architecture
 
-```
-The Market NEVER holds ERC20 USDC directly.
-All balances are maintained in the Vault ledger.
-```
-
-**Key principle:**
-- `IVault(vault).balanceOf(market)` — the sole source of truth for balance
-- The Market may cache this value but must periodically assert equality
-
-### 3.2 Terminology
-
-| Term | Description |
-|------|-------------|
-| `vaultBalance(market)` | `IVault(vault).balanceOf(market)` — balance in the Vault ledger |
-| `creatorFeesAcc` | Accumulated creator fees (portion of vaultBalance) |
-| `protocolFeesAcc` | Accumulated protocol fees (portion of vaultBalance) |
-| `effectivePool` | `vaultBalance - creatorFeesAcc - protocolFeesAcc` — available for payouts |
-
-### 3.3 Vault Accounting Invariant
+In v2, MarketLMSR does **NOT** store user balances. The architecture is:
 
 ```
-vaultBalance(market) == effectivePool + creatorFeesAcc + protocolFeesAcc
+ShareToken (ERC-1155)  — stores all user token balances (YES/NO per conditionId)
+VaultV2                — stores all USDC balances (per-address ledger + splitReserve + feePool)
+MarketLMSR             — pure LMSR pricing engine + inventory holder
+BackstopRouter         — entry point for all LMSR trades (signature verification, delegation)
 ```
 
-**Fee accounting:**
-- Fees accumulate in `creatorFeesAcc` / `protocolFeesAcc`
-- Fees remain on the market ledger until explicitly withdrawn (withdrawFees)
-- On sell: `grossOut` is paid to the user; fees remain
+MarketLMSR holds ERC-1155 tokens as **inventory** (the opposite side of each trade),
+not as user balances.
 
-### 3.4 Dust Handling
+### 3.2 Buy Flow
 
-Due to floor division in buy/sell/redeem, minor discrepancies are possible:
+```
+User wants to buy 100 YES shares for ~52 USDC:
 
-```solidity
-uint256 constant DUST_BOUND_PER_TRADE = 2;  // 2 units = $0.000002 per trade
+1. BackstopRouter verifies intent/sender
+2. Vault.transferBetween(buyer, market, 52)         — buyer pays USDC
+3. fee = 52 * totalFeeBps / BPS                      — calculate fee
+4. net = 52 - fee                                     — net USDC for LMSR
+5. sharesOut = LMSR.calcSharesOut(net, YES)           — LMSR pricing
+6. require(sharesOut >= net)                           — Polymarket guarantee: price ≤ $1
+7. Vault.lockForSplit(market, net)                    — lock USDC in splitReserve
+8. ShareToken.splitPosition(conditionId, market, sharesOut) — mint YES+NO to market
+9. ShareToken.safeTransferFrom(market, buyer, yesTokenId, sharesOut)  — buyer gets YES
+   — market keeps NO as inventory
+10. Vault.accumulateFee(market, fee)                   — fee → feePool
+11. qYes += sharesOut * SCALE_6_TO_18                  — update LMSR state
 ```
 
-Final invariant accounting for dust:
+### 3.3 Sell Flow
+
 ```
-abs(vaultBalance(market) - (effectivePool + fees)) <= DUST_BOUND_PER_TRADE * tradeCount
+User wants to sell 100 YES shares for ~48 USDC:
+
+1. BackstopRouter calls ShareToken.safeTransferFrom(user, market, yesTokenId, 100)
+   — requires user's one-time approval of BackstopRouter (see HYBRID_SPEC §7.1.1)
+2. gross = LMSR cost difference (C_before - C_after)  — LMSR pricing
+3. ShareToken.mergePositions(conditionId, market, 100) — burn 100 YES + 100 NO (market's inventory)
+4. Vault.releaseFromMerge(market, 100)                 — release USDC from splitReserve → market balance
+5. fee = gross * totalFeeBps / BPS                     — calculate fee
+6. amountOut = gross - fee
+7. Vault.transferBetween(market, seller, amountOut)    — seller receives USDC
+8. Vault.accumulateFee(market, fee)                    — fee → feePool
+9. qYes -= 100 * SCALE_6_TO_18                         — update LMSR state
 ```
 
-An explicit `dustAcc` counter may also be maintained for precise auditing.
+### 3.4 Redeem (post-resolution)
+
+Redemption is handled entirely by **ShareToken**, not MarketLMSR:
+
+```
+1. ShareToken.redeemPositions(conditionId)
+   — checks status == Resolved
+   — burns winning tokens (or both if Invalid)
+   — calls Vault.releaseForRedeem(user, amount)
+2. User receives USDC: winningShares * payoutPerShare / 1e6
+   — payoutPerShare = 1_000_000 for Yes/No outcome ($1)
+   — payoutPerShare = 500_000 for Invalid outcome ($0.50)
+```
+
+MarketLMSR has no `redeem()` function. After resolution, the creator
+can call `withdrawSeedAndFees()` to reclaim remaining seed + accumulated fees.
+
+### 3.5 Key Invariants
+
+```
+PRE-RESOLUTION:
+  ShareToken.totalSupply(yesTokenId) == ShareToken.totalSupply(noTokenId)
+  — guaranteed by split/merge always operating in pairs
+
+  Vault.splitReserve covers all outstanding token pairs:
+  splitReserve >= totalSupply(yesTokenId) * PAYOUT_PER_SHARE / 1e6
+
+POST-RESOLUTION:
+  Redemption releases splitReserve → user balances
+  No new tokens can be minted (splitPosition requires status == Open)
+```
 
 ---
 
-## 4. Fixed-Point Math Standard
+## 4. Fixed-Point Math
 
-### 4.1 Unified Standard: SD59x18 for All Math
+### 4.1 Standard: SD59x18 for All LMSR Math
 
-**Principle:** All LMSR computations (exp, ln, sigmoid) are performed in SD59x18 (signed, 18 decimals).
+All LMSR computations (exp, ln, sigmoid) use PRBMath SD59x18 (signed, 18 decimals).
 
 **Conversions:**
 ```
-USDC (6 dec) → SD59x18 (18 dec): value * 1e12
-SD59x18 (18 dec) → USDC (6 dec): value / 1e12
+USDC/shares (6 dec) → SD59x18 (18 dec):  value * SCALE_6_TO_18
+SD59x18 (18 dec) → USDC/shares (6 dec):  value / SCALE_6_TO_18
 ```
 
 ### 4.2 Storage vs Computation
 
-| Variable | Storage Type | Computation Type | Notes |
-|----------|--------------|------------------|-------|
-| `b` | `int256` (SD59x18) | SD59x18 | Stored as 1e18, not in USDC decimals |
-| `qYes`, `qNo` | `int256` (SD59x18) | SD59x18 | Signed, may be < 0 |
-| `baseCost` | `uint256` (USDC 6 dec) | — | Result of _calcCost, already in USDC |
-| `yesShares`, `noShares` | `uint256` (6 dec) | — | 1 share = 1e6 |
-| `amountUsdc` | `uint256` (6 dec) | SD59x18 after *1e12 | Input/output in USDC |
+| Variable | Storage Type | Scale | Notes |
+|----------|-------------|-------|-------|
+| `b` | `int256` (SD59x18) | 1e18 per $1 | e.g. 100e18 = $100 |
+| `qYes`, `qNo` | `int256` (SD59x18) | 1e18 per share | Signed, may be < 0 |
+| `baseCost` | `uint256` | USDC 6 dec | Result of calcCostUsdc |
+| shares (in/out) | `uint256` | 6 dec | 1 share = 1e6 = $1 face |
+| `amountUsdc` | `uint256` | 6 dec | Input/output in USDC |
 
 ### 4.3 Constants
 
 ```solidity
+// Scale conversion
+int256 constant SCALE_6_TO_18 = 1e12;    // converts 6-decimal → 18-decimal
+
 // SD59x18 constants
-int256 public constant UNIT = 1e18;                    // 1.0 in SD59x18
-int256 public constant LN2 = 693147180559945309;       // ln(2) * 1e18
-int256 public constant USDC_TO_SD59x18 = 1e12;         // conversion 6 dec → 18 dec
+int256 constant UNIT_INT = 1e18;          // 1.0 in SD59x18
+int256 constant SIGMOID_CLAMP = 20;       // clamp when |qDiff/b| > 20
 
-// Limits (in SD59x18)
-int256 public constant MIN_B = 10 * UNIT;              // $10 (in 1e18)
-int256 public constant MAX_B = 10_000 * UNIT;          // $10,000 (in 1e18)
-int256 public constant SIGMOID_CLAMP = 20;             // clamp when |qDiff/b| > 20
-
-// USDC constants
-uint256 public constant MIN_TRADE_USDC = 10_000;       // $0.01
-uint256 public constant PAYOUT_PER_SHARE = 1_000_000;  // $1
-uint256 public constant BPS = 10_000;
+// Price / fee constants
+uint256 constant BPS = 10_000;
+uint256 constant MIN_TRADE_USDC = 10_000;       // $0.01
+uint256 constant PAYOUT_PER_SHARE = 1_000_000;  // $1
 ```
 
-### 4.4 MAX_Q_DELTA Derivation
+> **Note on naming**: The onchain constant is `USDC_TO_SD59x18 = 1e12` in current deployed
+> contracts. Semantically it is a scale factor from 6 to 18 decimals. In this spec we use
+> the clearer name `SCALE_6_TO_18`. Both refer to the same value `1e12`.
 
-`MAX_Q_DELTA` protects against overflow in exp/ln.
-
-**Derivation:**
-- Sigmoid is clamped when `|qYes - qNo| / b > SIGMOID_CLAMP`
-- With `SIGMOID_CLAMP = 20` and `MAX_B = 10_000 * 1e18`:
-- `MAX_Q_DELTA = SIGMOID_CLAMP * MAX_B = 20 * 10_000 * 1e18 = 2e23`
+### 4.4 maxLossUsdc Derivation
 
 ```solidity
-int256 public constant MAX_Q_DELTA = 2e23;  // = SIGMOID_CLAMP * MAX_B
+// b is SD59x18, ln(2) is SD59x18:
+// b * ln(2) → SD59x18 * SD59x18 = 1e36 scale
+// Divide by UNIT_INT (1e18) → back to SD59x18 (1e18)
+// Divide by SCALE_6_TO_18 (1e12) → USDC 6 decimals
+
+int256 LN2 = 693147180559945309;  // ln(2) * 1e18
+
+uint256 maxLossUsdc = uint256((b * LN2) / UNIT_INT) / uint256(SCALE_6_TO_18);
+require(seedUsdc >= maxLossUsdc, "seed must cover max loss");
 ```
 
----
+The intermediate `b * LN2` is safe from overflow for `b <= MAX_B` (10_000e18):
+`10_000e18 * 693e15 ≈ 6.93e39`, well within int256 range (~5.7e76).
 
-## 5. MarketLMSR.sol Contract
+### 4.5 Log-Sum-Exp Trick (Overflow Protection)
 
-### 5.1 State Variables
+The cost function uses the Log-Sum-Exp trick to prevent exp() overflow:
 
-```solidity
-// LMSR parameters (all in SD59x18)
-int256 public b;              // Liquidity parameter (SD59x18, e.g. 100e18 = $100)
-int256 public qYes;           // YES shares sold (SD59x18, signed)
-int256 public qNo;            // NO shares sold (SD59x18, signed)
-uint256 public baseCost;      // C(qYes0, qNo0) at initialize (USDC 6 dec)
-
-// Fee accumulators (USDC 6 dec)
-uint256 public creatorFeesAcc;
-uint256 public protocolFeesAcc;
-
-// User positions (6 decimals, 1 share = 1e6)
-mapping(address => uint256) public yesShares;
-mapping(address => uint256) public noShares;
-uint256 public yesSharesTotal;
-uint256 public noSharesTotal;
-
-// Resolution
-uint256 public payoutPerShare;
-uint256 public winningSharesTotal;
+```
+C = b * (m + ln(e^(a-m) + e^(c-m)))
+where a = qYes/b, c = qNo/b, m = max(a, c)
 ```
 
-### 5.2 Initialization (with Initial Bias)
+Since `a - m ≤ 0` and `c - m ≤ 0`, both exp() inputs are non-positive,
+guaranteeing no overflow. The implementation:
 
 ```solidity
-function initialize(
-    int256 _b,                    // SD59x18: e.g. 100e18 = $100
-    uint256 seedUsdc,             // USDC 6 dec
-    uint256 initialPriceYesBps    // 100 = 1%, 5000 = 50%, 9900 = 99%
-) external onlyFactory {
-    require(_b >= MIN_B && _b <= MAX_B, "invalid b");
-    require(initialPriceYesBps >= 100 && initialPriceYesBps <= 9900, "invalid price");
-
-    b = _b;
-
-    // Calculate initial q values for the given price
-    // P(yes) = 1 / (1 + e^(-(qYes - qNo)/b))
-    // Solve: qDiff = -b * ln(1/P - 1)
-    (qYes, qNo) = _calcInitialQ(initialPriceYesBps);
-
-    // baseCost = C(qYes0, qNo0) — baseline for the invariant
-    baseCost = _calcCost(qYes, qNo);
-
-    // Minimum seed must cover max_loss = b * ln(2)
-    // b is in SD59x18, LN2 is in SD59x18, result is in SD59x18, converted to USDC
-    uint256 maxLossUsdc = uint256((b * LN2) / UNIT) / USDC_TO_SD59x18;
-    require(seedUsdc >= maxLossUsdc, "seed must cover max loss");
-
-    // Vault has already transferred the seed via pullForNewMarket
-    // vaultBalance(this) == seedUsdc
-
-    // No shares minted to creator — virtual liquidity only
-    yesSharesTotal = 0;
-    noSharesTotal = 0;
-
-    initialized = true;
-}
-```
-
-### 5.3 Buy (Analytical Solution)
-
-```solidity
-function buyYes(uint256 amountUsdc, uint256 minSharesOut)
-    external onlyOpen returns (uint256 sharesOut)
+function calcCostUsdc(int256 b, int256 _qYes, int256 _qNo)
+    internal pure returns (uint256 cost)
 {
-    require(amountUsdc >= MIN_TRADE_USDC, "trade too small");
-
-    // Fee
-    uint256 fee = (amountUsdc * totalFeeBps) / BPS;
-    uint256 net = amountUsdc - fee;
-
-    // Analytical solution for sharesOut
-    sharesOut = _calcSharesOut(net, true); // true = YES side
-
-    require(sharesOut >= minSharesOut, "slippage");
-
-    // Convert shares to SD59x18 for q update
-    int256 deltaQ = int256(sharesOut) * USDC_TO_SD59x18;
-    int256 newQYes = qYes + deltaQ;
-
-    // Overflow check
-    require(_abs(newQYes - qNo) <= MAX_Q_DELTA, "q delta overflow");
-
-    // Update state
-    qYes = newQYes;
-
-    // Vault: debit from user
-    IVault(vault).spendFromUser(msg.sender, amountUsdc, LedgerTransferReason.Buy);
-    _accumulateFees(fee);
-
-    // Mint shares
-    yesShares[msg.sender] += sharesOut;
-    yesSharesTotal += sharesOut;
-
-    // Collateralization invariant
-    uint256 vaultBal = IVault(vault).balanceOf(address(this));
-    assert(vaultBal - creatorFeesAcc - protocolFeesAcc >= yesSharesTotal);
-
-    emit Trade(...);
-}
-```
-
-### 5.4 Sell
-
-```solidity
-function sellYes(uint256 shares, uint256 minAmountOut)
-    external onlyOpen returns (uint256 amountOut)
-{
-    require(shares > 0 && yesShares[msg.sender] >= shares, "invalid shares");
-
-    // Convert shares to SD59x18
-    int256 deltaQ = int256(shares) * USDC_TO_SD59x18;
-    int256 newQYes = qYes - deltaQ;
-
-    // Calculate payout via LMSR
-    uint256 currentCost = _calcCost(qYes, qNo);
-    uint256 newCost = _calcCost(newQYes, qNo);
-    uint256 grossOut = currentCost - newCost;
-
-    // Fee
-    uint256 fee = (grossOut * totalFeeBps) / BPS;
-    amountOut = grossOut - fee;
-
-    require(amountOut >= minAmountOut, "slippage");
-
-    // Liquidity check: grossOut must be available
-    uint256 vaultBal = IVault(vault).balanceOf(address(this));
-    uint256 effectivePool = vaultBal - creatorFeesAcc - protocolFeesAcc;
-    require(effectivePool >= grossOut, "insufficient liquidity");
-
-    // Update state
-    qYes = newQYes;
-    _accumulateFees(fee);
-
-    // Burn shares
-    yesShares[msg.sender] -= shares;
-    yesSharesTotal -= shares;
-
-    // Pay user (amountOut; fees remain on the market ledger)
-    IVault(vault).payToUser(msg.sender, amountOut, LedgerTransferReason.Sell);
-
-    emit Trade(...);
-}
-```
-
-### 5.5 Resolve & Redeem (Fixed Payout)
-
-```solidity
-function resolveMarket(Outcome _outcome) external onlyAdmin {
-    // ... validation ...
-
-    // In LMSR, each share pays EXACTLY $1
-    payoutPerShare = PAYOUT_PER_SHARE;  // 1e6 = $1
-
-    if (_outcome == Outcome.Yes) {
-        winningSharesTotal = yesSharesTotal;
-    } else if (_outcome == Outcome.No) {
-        winningSharesTotal = noSharesTotal;
-    } else {
-        // Invalid: proportional refund
-        winningSharesTotal = yesSharesTotal + noSharesTotal;
-        uint256 vaultBal = IVault(vault).balanceOf(address(this));
-        uint256 effectivePool = vaultBal - creatorFeesAcc - protocolFeesAcc;
-        payoutPerShare = winningSharesTotal > 0
-            ? effectivePool * 1e6 / winningSharesTotal
-            : 0;
-    }
-
-    // Collateralization check
-    uint256 vaultBal = IVault(vault).balanceOf(address(this));
-    uint256 effectivePool = vaultBal - creatorFeesAcc - protocolFeesAcc;
-    require(effectivePool >= winningSharesTotal * payoutPerShare / 1e6, "undercollateralized");
-
-    status = MarketStatus.Resolved;
-    outcome = _outcome;
-}
-
-function redeem() external returns (uint256 payout) {
-    require(status == MarketStatus.Resolved, "not resolved");
-
-    uint256 claimShares = (outcome == Outcome.Yes)
-        ? yesShares[msg.sender]
-        : (outcome == Outcome.No)
-            ? noShares[msg.sender]
-            : yesShares[msg.sender] + noShares[msg.sender];
-
-    require(claimShares > 0, "nothing to redeem");
-
-    payout = claimShares * payoutPerShare / 1e6;
-
-    yesShares[msg.sender] = 0;
-    noShares[msg.sender] = 0;
-
-    IVault(vault).payToUser(msg.sender, payout, LedgerTransferReason.Redeem);
-
-    emit Redeemed(msg.sender, claimShares, payout);
-}
-```
-
-### 5.6 Price Calculation (Sigmoid)
-
-```solidity
-function getPrices() external view returns (uint256 priceYesBps, uint256 priceNoBps) {
-    // P(yes) = 1 / (1 + e^(-(qYes - qNo)/b))
-
-    int256 diff = qYes - qNo;  // SD59x18
-
-    // Clamp to protect exp() from overflow — NOT part of the economics
-    // When |diff/b| > SIGMOID_CLAMP, sigmoid ≈ 0 or 1
-    if (diff > b * SIGMOID_CLAMP) {
-        priceYesBps = 9999;
-    } else if (diff < -b * SIGMOID_CLAMP) {
-        priceYesBps = 1;
-    } else {
-        priceYesBps = _sigmoid(diff, b);
-    }
-
-    priceNoBps = BPS - priceYesBps;
-}
-```
-
-### 5.7 Math Helpers (Log-Sum-Exp Trick) — Safe Implementation
-
-```solidity
-import { SD59x18, sd, exp, ln, UNIT, ZERO } from "@prb/math/SD59x18.sol";
-
-/**
- * Log-Sum-Exp trick to prevent overflow:
- * C = b * (m + ln(e^(a-m) + e^(c-m)))
- * where m = max(qYes/b, qNo/b)
- *
- * ALL computations are in signed SD59x18.
- * The result is converted to USDC (uint256, 6 dec) only at the end.
- */
-function _calcCost(int256 _qYes, int256 _qNo) internal view returns (uint256) {
-    // All operations in SD59x18
     SD59x18 bSD = sd(b);
-    SD59x18 a = sd(_qYes).div(bSD);   // qYes / b
-    SD59x18 c = sd(_qNo).div(bSD);    // qNo / b
-
-    // m = max(a, c) — for numerical stability
+    SD59x18 a = sd(_qYes).div(bSD);
+    SD59x18 c = sd(_qNo).div(bSD);
     SD59x18 m = a.gt(c) ? a : c;
 
-    // e^(a-m) + e^(c-m)
-    SD59x18 expAM = exp(a.sub(m));
-    SD59x18 expCM = exp(c.sub(m));
-    SD59x18 sumExp = expAM.add(expCM);
+    SD59x18 sumExp = exp(a.sub(m)).add(exp(c.sub(m)));
+    SD59x18 result = bSD.mul(m.add(ln(sumExp)));
 
-    // ln(sum)
-    SD59x18 lnSum = ln(sumExp);
-
-    // result = b * (m + ln(sum)) — still SD59x18 (signed)
-    SD59x18 result = bSD.mul(m.add(lnSum));
-
-    // Convert SD59x18 → USDC 6 decimals
-    // result.unwrap() returns int256 in 1e18
-    // Divide by 1e12 to obtain 6 decimals
     int256 rawResult = result.unwrap();
-
-    // result is always >= 0 for valid q (LMSR cost function property)
-    // Safety check nonetheless
     require(rawResult >= 0, "negative cost");
-
-    return uint256(rawResult) / uint256(USDC_TO_SD59x18);
+    cost = uint256(rawResult) / uint256(SCALE_6_TO_18);
 }
+```
 
-/**
- * Sigmoid for price calculation
- * P(yes) = 1 / (1 + e^(-diff/b))
- * Returns: priceYesBps (1-9999)
- */
-function _sigmoid(int256 diff, int256 _b) internal pure returns (uint256) {
-    SD59x18 x = sd(diff).div(sd(_b));    // diff / b
-    SD59x18 negX = ZERO.sub(x);          // -x
-    SD59x18 expNegX = exp(negX);         // e^(-x)
-    SD59x18 denom = UNIT.add(expNegX);   // 1 + e^(-x)
-    SD59x18 prob = UNIT.div(denom);      // 1 / (1 + e^(-x))
+### 4.6 Binary Search for sharesOut
 
-    // Convert to BPS (0-10000)
-    // prob.unwrap() is in 1e18, we want BPS
-    uint256 probBps = uint256(prob.unwrap()) * BPS / uint256(UNIT);
+`calcSharesOut` uses binary search (40 iterations) to find the number of shares
+purchasable for a given USDC cost:
 
-    // Clamp to 1-9999 (never exactly 0 or 100%)
+```
+Given: costUsdc (net, after fees)
+Find:  sharesOut such that C(q + delta) - C(q) ≈ costUsdc
+
+Binary search over [0, costUsdc * 200]:
+  mid = (low + high) / 2
+  newCost = calcCostUsdc(q + mid * SCALE_6_TO_18)
+  if newCost <= targetCost → low = mid
+  else → high = mid
+
+Result: sharesOut = low (conservative, never overspends)
+```
+
+40 iterations give ~1e12 precision (more than sufficient for 6-decimal values).
+
+### 4.7 Sigmoid Price Calculation
+
+```solidity
+function sigmoid(int256 b, int256 diff) internal pure returns (uint256 priceYesBps) {
+    // P(yes) = 1 / (1 + e^(-diff/b))
+    SD59x18 x = sd(diff).div(sd(b));
+    SD59x18 expNegX = exp(ZERO.sub(x));
+    SD59x18 prob = UNIT.div(UNIT.add(expNegX));
+
+    uint256 probBps = uint256(prob.unwrap()) * BPS / uint256(UNIT_INT);
+
+    // Clamp to 1-9999 (never exactly 0% or 100%)
     if (probBps == 0) return 1;
     if (probBps >= BPS) return 9999;
     return probBps;
 }
 ```
 
----
-
-## 6. Factory Integration (per factory.md)
-
-### 6.1 Create Market with pullForNewMarket
-
-```solidity
-function createMarket(
-    // ... existing params ...
-    LiquidityTier liquidityTier,
-    uint256 initialPriceYesBps
-) external returns (address market) {
-    (int256 bValue, uint256 minSeed) = getLiquidityParams(liquidityTier);
-
-    require(initialPriceYesBps >= 100 && initialPriceYesBps <= 9900, "invalid price");
-
-    // 1. Deploy market contract
-    market = address(new MarketLMSR(config));
-
-    // 2. Whitelist market in Vault (if required)
-    IVault(vault).whitelistMarket(market);
-
-    // 3. Pull seed from creator to market via Vault
-    // pullForNewMarket = spendFromUser(creator) + credit to market ledger
-    IVault(vault).pullForNewMarket(msg.sender, market, minSeed);
-
-    // 4. Initialize market with LMSR params
-    MarketLMSR(market).initialize(bValue, minSeed, initialPriceYesBps);
-
-    emit MarketCreated(market, msg.sender, bValue, initialPriceYesBps);
-}
-```
-
-### 6.2 Liquidity Tiers
-
-```solidity
-enum LiquidityTier { Low, Medium, High }
-
-function getLiquidityParams(LiquidityTier tier)
-    public pure returns (int256 bValue, uint256 minSeedUsdc)
-{
-    // bValue in SD59x18 (1e18 = $1)
-    // minSeedUsdc in USDC 6 decimals
-
-    if (tier == LiquidityTier.Low) {
-        bValue = 50 * UNIT;           // $50 in SD59x18
-        minSeedUsdc = 35_000_000;     // $35 (≈ 0.693 * 50)
-    } else if (tier == LiquidityTier.Medium) {
-        bValue = 200 * UNIT;          // $200
-        minSeedUsdc = 139_000_000;    // $139
-    } else {
-        bValue = 1000 * UNIT;         // $1000
-        minSeedUsdc = 693_000_000;    // $693
-    }
-}
-```
+Sigmoid is clamped when `|qYes - qNo| / b > SIGMOID_CLAMP (20)` to avoid
+unnecessary exp() computation at extreme prices.
 
 ---
 
-## 7. Events (with Clear Semantics)
+## 5. Trade Event Semantics
 
 ```solidity
 event Trade(
     address indexed trader,
     Side side,           // Yes or No
     bool isBuy,          // true = buy, false = sell
-    uint256 amountUsdc,  // buy: USDC spent; sell: USDC received (after fees)
-    uint256 shares,      // buy: shares received; sell: shares burned
-    uint256 fee,         // fee charged (in USDC)
-    uint256 priceYesBps, // price after trade
-    int256 qYesAfter,    // qYes after trade (SD59x18, for indexing)
+    uint256 amountUsdc,  // see note below
+    uint256 shares,      // buy: shares received; sell: shares sold
+    uint256 fee,         // fee charged (USDC, 6 dec)
+    uint256 priceYesBps, // YES price after trade (1-9999)
+    int256 qYesAfter,    // qYes after trade (SD59x18)
     int256 qNoAfter      // qNo after trade (SD59x18)
 );
 ```
 
-**Semantics for indexing:**
-- `isBuy=true`: `amountUsdc` = USDC spent (gross), `shares` = received
-- `isBuy=false`: `shares` = sold, `amountUsdc` = USDC received (net, after fee)
-- `fee` is always in USDC, already deducted from / added to `amountUsdc`
+**`amountUsdc` asymmetry (current implementation):**
+- `isBuy=true`: `amountUsdc` = gross USDC spent (includes fee)
+- `isBuy=false`: `amountUsdc` = net USDC received (after fee deducted)
 
----
+`fee` is always in USDC and always emitted separately.
 
-## 8. Status and Lifecycle
-
-```solidity
-enum MarketStatus {
-    Open,      // Trading allowed
-    Resolved   // Trading stopped, redemption allowed
-}
-// Paused removed from MVP — not implemented
+For indexing, the volume calculation is:
+```
+buyVolume = amountUsdc                    (already gross)
+sellVolume = amountUsdc + fee             (reconstruct gross from net + fee)
 ```
 
-**Lifecycle:**
+> **BackstopRouter normalization**: The `BackstopTrade` event in BackstopRouter
+> always emits `amountUsdc` as the USDC figure and `shares` as the share figure,
+> regardless of isBuy. See HYBRID_SPEC §7.4 step 9.
+
+---
+
+## 6. Polymarket-Style Price Guarantee
+
 ```
-[Factory creates] → Open → [admin resolves] → Resolved
-                         → [timeout] → markAsInvalid() → Resolved(Invalid)
-```
-
----
-
-## 9. Gas Optimization
-
-### 9.1 PRBMath Costs
-
-- `exp()` ≈ 2000-3000 gas
-- `ln()` ≈ 2000-3000 gas
-- Full `_calcCost()` ≈ 8000-12000 gas
-
-### 9.2 Optimizations
-
-1. **Cache currentCost** — store after each trade:
-   ```solidity
-   uint256 public cachedCost;  // updated after every buy/sell
-   ```
-
-2. **Log-Sum-Exp trick** — mandatory, prevents overflow
-
-3. **Approximations for getPrices()** — a lookup table can be used for sigmoid
-
-### 9.3 Expected Gas
-
-| Operation | CPMM | LMSR |
-|-----------|------|------|
-| buyYes    | ~80k | ~120k |
-| sellYes   | ~85k | ~125k |
-| getPrices | ~5k  | ~15k |
-
----
-
-## 10. Testing
-
-### 10.1 Unit Tests
-
-- [ ] `testInitialize_validParams`
-- [ ] `testInitialize_seedTooSmall` — revert
-- [ ] `testInitialize_withBias` — correct initial price via baseCost
-- [ ] `testBuyYes_sharesEqualsOneDollar` — payout = $1 per share
-- [ ] `testSellYes_refundCorrect` — fees stay on market
-- [ ] `testMaxLoss` — creator loss does not exceed `b * ln(2)`
-- [ ] `testResolve_fixedPayout` — each share pays exactly $1
-- [ ] `testCollateralization_alwaysSufficient`
-- [ ] `testVaultBalance_matchesInvariant`
-
-### 10.2 Invariant Tests
-
-- `vaultBalance(market) >= C(qYes, qNo) - baseCost` always holds
-- `vaultBalance(market) >= max(yesSharesTotal, noSharesTotal)` (collateralization)
-- `vaultBalance(market) == effectivePool + creatorFeesAcc + protocolFeesAcc` (accounting)
-- `priceYes + priceNo == 10000 bps`
-- `abs(qYes - qNo) <= MAX_Q_DELTA`
-
-### 10.3 Fuzz Tests
-
-- Arbitrary sequences of buy/sell operations
-- Extreme values of b (MIN_B to MAX_B)
-- Random initial prices (100 to 9900 bps)
-- Edge cases with overflow/underflow in SD59x18
-
----
-
-## 11. Migration Strategy
-
-1. **Deploy MarketLMSR.sol** — new contract
-2. **Update Factory** — creates LMSR markets
-3. **Old CPMM markets** — continue operating until resolution
-4. **Frontend** — detects type by presence of the `b` field
-
-### 11.1 Interface Compatibility
-
-```solidity
-interface IMarket {
-    // Common to both CPMM and LMSR
-    function buyYes(uint256 amountUsdc, uint256 minSharesOut) external returns (uint256);
-    function sellYes(uint256 shares, uint256 minAmountOut) external returns (uint256);
-    function getPrices() external view returns (uint256 priceYesBps, uint256 priceNoBps);
-    function redeem() external returns (uint256);
-}
+require(sharesOut >= net, "price exceeds $1");
 ```
 
----
+This check ensures that the user always receives at least as many shares as the
+net USDC spent (in 6-decimal units). Since 1 share redeems for exactly $1,
+this guarantees the share price never exceeds $1.
 
-## 12. Open Questions
-
-1. **Math library** — PRBMath SD59x18 *(resolved)*
-2. **Payout model** — Fixed $1 per share, not pari-mutuel *(resolved)*
-3. **Creator shares** — No initial shares; virtual liquidity only *(resolved)*
-4. **Fixed-point standard** — All math in SD59x18 (1e18) *(resolved)*
-5. **Vault integration** — vaultBalance via IVault.balanceOf() *(resolved)*
-6. **Adding liquidity post-creation?** — v1: no, v2: under consideration
-7. **Oracle for initial price?** — v1: creator sets manually
+Combined with the fixed $1 payout:
+- Maximum loss on a winning bet = fee only
+- No scenario where "invested $60, won, received $15"
 
 ---
 
-## 13. References
+## 7. Gas Profile
+
+### 7.1 PRBMath Costs
+
+- `exp()`: ~2,000–3,000 gas
+- `ln()`: ~2,000–3,000 gas
+- Full `calcCostUsdc()`: ~8,000–12,000 gas
+- Binary search (40 iterations × calcCostUsdc): ~400,000–500,000 gas
+
+### 7.2 Total Gas per Operation
+
+| Operation | Estimated Gas | Notes |
+|-----------|--------------|-------|
+| buyYes/buyNo | ~500–600k | Includes binary search + split + transfer |
+| sellYes/sellNo | ~200–300k | No binary search (direct cost diff) |
+| getPrices | ~15k | Single sigmoid computation |
+| quoteBuy | ~500k | Same binary search as buy (view) |
+| quoteSell | ~20k | Two calcCostUsdc calls (view) |
+
+### 7.3 Optimization: Cached Cost
+
+The `baseCost` is stored once at initialization. Each buy/sell computes
+the cost difference directly rather than maintaining a running `cachedCost`,
+since the binary search in buy already calls `calcCostUsdc` for each iteration.
+
+---
+
+## 8. Liquidity Tiers
+
+```
+┌─────────────┬──────────────┬──────────────┬────────────┐
+│ Tier        │ b (SD59x18)  │ Min Seed     │ Max Loss   │
+├─────────────┼──────────────┼──────────────┼────────────┤
+│ Low         │  50 * 1e18   │  $35         │  $34.66    │
+│ Medium      │ 200 * 1e18   │ $139         │ $138.63    │
+│ High        │ 1000 * 1e18  │ $693         │ $693.15    │
+└─────────────┴──────────────┴──────────────┴────────────┘
+
+Min seed formula: ceil(b * ln(2) / 1e18 / 1e12)
+```
+
+Tiers are enforced by Factory at market creation. See HYBRID_SPEC §9 for the
+full market creation flow (EIP-1167 clone → initConfig → initialize).
+
+---
+
+## 9. Testing
+
+### 9.1 TypeScript (SDK — `@flipcoin/sdk`)
+
+LMSR math tests in `packages/sdk/src/math/lmsrMath.test.ts` (58 tests):
+- Price calculations (sigmoid function)
+- Cost function (Log-Sum-Exp)
+- Buy/sell simulations
+- Polymarket-style guarantee (`sharesOut >= netUsdc`)
+- Slippage calculations, initial price calculations, liquidity tiers
+
+### 9.2 Solidity (Foundry)
+
+`test/MarketLMSRMath.t.sol` (34 tests):
+- Sigmoid correctness across price range
+- Buy/sell math: quoteBuy/quoteSell consistency
+- Polymarket guarantee enforcement
+- Edge cases: extreme b values, boundary prices
+
+`test/BackstopRouterAdvanced.t.sol` (additional LMSR integration):
+- Fee ceiling checks, delegation spend, gasless execution
+
+`test/FuzzInvariants.t.sol` (7 fuzz tests, 256 runs each):
+- Vault solvency invariant
+- Token pair invariant (yesSupply == noSupply)
+- Polymarket guarantee across random trades
+- Full lifecycle fuzz (create → trade → resolve → redeem)
+
+---
+
+## 10. References
 
 - [LMSR Original Paper (Hanson)](https://mason.gmu.edu/~rhanson/mktscore.pdf)
 - [Gnosis Conditional Tokens](https://docs.gnosis.io/conditionaltokens/)
 - [PRBMath Library](https://github.com/PaulRBerg/prb-math)
 - [Log-Sum-Exp Trick](https://en.wikipedia.org/wiki/LogSumExp)
 - [Polymarket Docs](https://docs.polymarket.com/)
+- [HYBRID_SPEC_v5.md](HYBRID_SPEC_v5.md) — Full v2 contract specification
