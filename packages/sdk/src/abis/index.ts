@@ -1,2 +1,2 @@
-export * from "./v1";
-export * from "./v2";
+export * from "./v1/index.js";
+export * from "./v2/index.js";
