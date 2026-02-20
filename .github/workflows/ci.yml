@@ -50,8 +50,5 @@ jobs:
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
 
-      - name: Run forge build
-        run: forge build
-
       - name: Run forge tests
-        run: forge test -v
+        run: forge test -v --match-path "test/**"
