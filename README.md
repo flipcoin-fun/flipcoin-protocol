@@ -103,12 +103,30 @@ npm test       # 824 tests
 npm run build
 ```
 
+## Security Audit
+
+The v2 contracts have been audited. **18 findings** (2 Critical, 4 High, 6 Medium, 6 Low) were identified and **all fixed** with 21 regression tests.
+
+**[Full Audit Report →](docs/SECURITY_AUDIT_CONTRACTS.md)**
+
+| Severity | Found | Fixed |
+|----------|-------|-------|
+| Critical | 2 | 2 |
+| High | 4 | 4 |
+| Medium | 6 | 5 + 1 operational TODO |
+| Low | 6 | 6 |
+
+Key fixes: undercollateralized mint prevention (C-1), dead code removal (C-2), price validation (H-1/H-2), fee ceiling enforcement (H-4), global pause on BackstopRouter (M-5).
+
+Auditor: Claude Opus 4.6 (automated line-by-line review, February 2026). See also [SECURITY.md](SECURITY.md) for vulnerability disclosure policy.
+
 ## Documentation
 
-- [Hybrid CLOB + LMSR Architecture](docs/HYBRID_SPEC_v5.md) — full contract specification (audit-ready)
+- [Hybrid CLOB + LMSR Architecture](docs/HYBRID_SPEC_v5.md) — full contract specification
 - [LMSR Math Foundations](docs/LMSR_SPEC.md) — cost function, sigmoid pricing, collateralization proofs
 - [Resolution & Dispute Flow](docs/RESOLUTION.md) — two-phase resolution, dispute period, auto-invalid
 - [Agent API Reference](docs/AGENT_API.md) — REST API for autonomous market creation
+- [Security Audit Report](docs/SECURITY_AUDIT_CONTRACTS.md) — full findings, fixes, and test coverage
 
 ## Deployments
 
