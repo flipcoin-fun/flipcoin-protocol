@@ -28,7 +28,7 @@ contract ShareToken is ERC1155Supply, ReentrancyGuard {
     // ============================================================
 
     uint64 public constant DISPUTE_PERIOD = 24 hours;
-    uint64 public constant ADMIN_RESOLVE_WINDOW = 6 hours;
+    uint64 public constant ADMIN_RESOLVE_WINDOW = 24 hours;
     uint256 public constant PAYOUT_PER_SHARE_WINNER = 1_000_000; // $1 per winning share
     uint256 public constant PAYOUT_PER_SHARE_INVALID = 500_000;  // $0.50 per share (both sides)
     uint256 public constant BPS = 10_000;
@@ -41,6 +41,11 @@ contract ShareToken is ERC1155Supply, ReentrancyGuard {
     address public factory;
     address public vault;       // VaultV2 address for releaseForRedeem
     address public exchange;    // Exchange address for pauseCondition callback
+
+    /// @notice Resolution fee config (deployed but inactive at launch: resolutionFeeBps = 0)
+    uint256 public resolutionFeeBps;
+    address public resolutionFeeRecipient;
+    uint256 public resolutionFeesAccumulated;
 
     /// @notice Addresses authorized to call splitPosition/mergePositions
     /// (Exchange + MarketLMSR clones registered by Factory)
@@ -114,6 +119,8 @@ contract ShareToken is ERC1155Supply, ReentrancyGuard {
     event AuthorizedCallerAdded(address indexed caller);
     event AuthorizedCallerRemoved(address indexed caller);
     event AdminTransferred(address indexed oldAdmin, address indexed newAdmin);
+    event ResolutionFeeCollected(bytes32 indexed conditionId, address indexed holder, uint256 fee);
+    event PauseConditionFailed(bytes32 indexed conditionId);
 
     // ============================================================
     // Errors
@@ -200,6 +207,26 @@ contract ShareToken is ERC1155Supply, ReentrancyGuard {
         address old = admin;
         admin = newAdmin;
         emit AdminTransferred(old, newAdmin);
+    }
+
+    // ── Resolution Fee Admin ──
+
+    function setResolutionFeeBps(uint16 _feeBps) external onlyAdmin {
+        require(_feeBps <= 500, "fee too high");
+        resolutionFeeBps = _feeBps;
+    }
+
+    function setResolutionFeeRecipient(address _recipient) external onlyAdmin {
+        require(_recipient != address(0), "zero address");
+        resolutionFeeRecipient = _recipient;
+    }
+
+    function withdrawResolutionFees() external {
+        require(msg.sender == resolutionFeeRecipient || msg.sender == admin, "not authorized");
+        uint256 amount = resolutionFeesAccumulated;
+        require(amount > 0, "no fees");
+        resolutionFeesAccumulated = 0;
+        IVaultV2Minimal(vault).withdrawFeePoolByShareToken(resolutionFeeRecipient, amount);
     }
 
     // ============================================================
@@ -481,10 +508,22 @@ contract ShareToken is ERC1155Supply, ReentrancyGuard {
 
         require(payout > 0, "zero payout");
 
-        // Release USDC from Vault splitReserve to user
-        IVaultV2Minimal(vault).releaseForRedeem(msg.sender, payout);
+        // Calculate resolution fee (0 by default — mechanism deployed but inactive at launch)
+        uint256 fee = 0;
+        if (resolutionFeeBps > 0) {
+            fee = payout * resolutionFeeBps / BPS;
+        }
 
-        emit PositionRedeemed(conditionId, msg.sender, sharesBurned, payout);
+        // Release USDC from Vault splitReserve to user (with or without fee)
+        if (fee > 0) {
+            IVaultV2Minimal(vault).releaseForRedeemWithFee(msg.sender, payout, fee);
+            resolutionFeesAccumulated += fee;
+            emit ResolutionFeeCollected(conditionId, msg.sender, fee);
+        } else {
+            IVaultV2Minimal(vault).releaseForRedeem(msg.sender, payout);
+        }
+
+        emit PositionRedeemed(conditionId, msg.sender, sharesBurned, payout - fee);
     }
 
     // ============================================================
@@ -524,8 +563,11 @@ contract ShareToken is ERC1155Supply, ReentrancyGuard {
         (bool success,) = exchange.call(
             abi.encodeWithSignature("pauseCondition(bytes32)", conditionId)
         );
-        // We don't revert if this fails — resolution should still complete
-        success; // suppress unused warning
+        // We don't revert if this fails — resolution should still complete.
+        // But emit an event so off-chain monitoring can detect the failure.
+        if (!success) {
+            emit PauseConditionFailed(conditionId);
+        }
     }
 
     // Override required by Solidity for ERC1155Supply
@@ -543,4 +585,6 @@ contract ShareToken is ERC1155Supply, ReentrancyGuard {
 
 interface IVaultV2Minimal {
     function releaseForRedeem(address to, uint256 amount) external;
+    function releaseForRedeemWithFee(address to, uint256 payout, uint256 fee) external;
+    function withdrawFeePoolByShareToken(address to, uint256 amount) external;
 }

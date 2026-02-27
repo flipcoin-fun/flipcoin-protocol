@@ -43,9 +43,9 @@ import "../contracts/v2/FactoryV2.sol";
  */
 contract DeployV2BaseSepoliaScript is Script {
     // ── Fee Config ──
-    uint16 constant DEFAULT_TOTAL_FEE_BPS = 100;    // 1%
     uint16 constant DEFAULT_CREATOR_FEE_BPS = 50;    // 0.5%
-    uint16 constant DEFAULT_PROTOCOL_FEE_BPS = 50;   // 0.5%
+    uint16 constant DEFAULT_MAKER_FEE_BPS = 0;       // 0% (makers pay only creator fee)
+    uint16 constant DEFAULT_TAKER_FEE_BPS = 50;      // 0.5% (takers pay creator + protocol)
 
     // ── Duration Config ──
     uint64 constant MIN_MARKET_DURATION = 5 minutes;  // Short for testnet
@@ -90,7 +90,8 @@ contract DeployV2BaseSepoliaScript is Script {
             address(vault),
             address(delegationRegistry),
             deployer,                       // protocolFeeRecipient
-            DEFAULT_PROTOCOL_FEE_BPS
+            DEFAULT_MAKER_FEE_BPS,
+            DEFAULT_TAKER_FEE_BPS
         );
         console.log("[5/8] Exchange:", address(exchange));
 
@@ -117,9 +118,9 @@ contract DeployV2BaseSepoliaScript is Script {
             address(exchange),
             address(backstopRouter),
             address(delegationRegistry),
-            DEFAULT_TOTAL_FEE_BPS,
             DEFAULT_CREATOR_FEE_BPS,
-            DEFAULT_PROTOCOL_FEE_BPS,
+            DEFAULT_MAKER_FEE_BPS,
+            DEFAULT_TAKER_FEE_BPS,
             MIN_MARKET_DURATION,
             MAX_MARKET_DURATION
         );
@@ -136,7 +137,10 @@ contract DeployV2BaseSepoliaScript is Script {
         shareToken.setVault(address(vault));
         shareToken.setExchange(address(exchange));
         shareToken.addAuthorizedCaller(address(exchange));
-        console.log("ShareToken: factory, vault, exchange set + exchange authorized");
+        // Resolution fee: mechanism deployed but inactive (resolutionFeeBps = 0)
+        // TODO: Replace deployer with treasury/multisig at mainnet
+        shareToken.setResolutionFeeRecipient(deployer);
+        console.log("ShareToken: factory, vault, exchange set + exchange authorized + resolutionFeeRecipient set");
 
         // VaultV2 wiring
         vault.addTrustedFactory(address(factory));
@@ -186,8 +190,8 @@ contract DeployV2BaseSepoliaScript is Script {
         console.log("MarketLMSR impl:    ", address(marketImpl));
         console.log("FactoryV2:          ", address(factory));
         console.log("");
-        console.log("Fee config: total=%d creator=%d protocol=%d bps",
-            DEFAULT_TOTAL_FEE_BPS, DEFAULT_CREATOR_FEE_BPS, DEFAULT_PROTOCOL_FEE_BPS);
+        console.log("Fee config: creator=%d makerProtocol=%d takerProtocol=%d bps",
+            DEFAULT_CREATOR_FEE_BPS, DEFAULT_MAKER_FEE_BPS, DEFAULT_TAKER_FEE_BPS);
         console.log("Duration: min=%d max=%d seconds",
             MIN_MARKET_DURATION, MAX_MARKET_DURATION);
         console.log("");

@@ -102,7 +102,7 @@ contract ExchangeAdvancedTest is BaseV2Test {
 
     function _buyShares(address buyer, Side side, uint256 usdc) internal returns (uint256) {
         vm.prank(buyer);
-        return backstopRouter.executeTrade(conditionId, side, true, usdc, 0);
+        return backstopRouter.executeTrade(conditionId, side, true, usdc, 0, 10000);
     }
 
     // ============================================================

@@ -22,6 +22,15 @@ import {LedgerReason} from "./interfaces/Types.sol";
  *
  *   NO overlap: splitReserve, feePool, and totalBalances are three separate buckets.
  *
+ *   SECURITY MODEL: Settlement contracts (Exchange, BackstopRouter, MarketLMSR clones)
+ *   are fully trusted by admin. They can operate on ANY user balance without per-user
+ *   allowance approval. User protection relies on:
+ *     1. Only admin can whitelist settlement contracts (onlySettlement modifier)
+ *     2. Admin is expected to be a multisig/timelock (see TODO_MAINNET.md)
+ *     3. Global pause() as emergency kill switch
+ *   This is an intentional design choice for gas efficiency in v2. If granular per-user
+ *   allowances are needed, use v1 Vault which requires approveMarket before spending.
+ *
  * See HYBRID_SPEC_v5.2 §8 for full specification.
  */
 contract VaultV2 is ReentrancyGuard {
@@ -47,9 +56,6 @@ contract VaultV2 is ReentrancyGuard {
     /// @notice Accumulated fees (protocol + creator)
     uint256 public feePool;
 
-    /// @notice Allowances for market spending from user balances
-    mapping(address => mapping(address => uint256)) public allowances;
-
     // ── Permission roles ──
 
     mapping(address => bool) public whitelistedMarkets;
@@ -69,7 +75,6 @@ contract VaultV2 is ReentrancyGuard {
         LedgerReason indexed reason
     );
 
-    event MarketAllowanceSet(address indexed user, address indexed market, uint256 allowance);
     event WhitelistedMarketUpdated(address indexed market, bool whitelisted);
     event TrustedFactoryUpdated(address indexed factory, bool trusted);
     event Paused(address indexed admin);
@@ -83,11 +88,11 @@ contract VaultV2 is ReentrancyGuard {
     error NotAdmin();
     error VaultPaused();
     error InsufficientBalance();
-    error InsufficientAllowance();
     error InsufficientSplitReserve();
     error InsufficientFeePool();
     error NotAuthorized();
     error ZeroAmount();
+    error ZeroAddress();
 
     // ============================================================
     // Modifiers
@@ -105,15 +110,6 @@ contract VaultV2 is ReentrancyGuard {
 
     /// @dev Exchange, BackstopRouter, or whitelistedMarkets (MarketLMSR clones)
     modifier onlySettlement() {
-        if (
-            msg.sender != exchange &&
-            msg.sender != backstopRouter &&
-            !whitelistedMarkets[msg.sender]
-        ) revert NotAuthorized();
-        _;
-    }
-
-    modifier onlyExchangeOrSettlement() {
         if (
             msg.sender != exchange &&
             msg.sender != backstopRouter &&
@@ -168,6 +164,7 @@ contract VaultV2 is ReentrancyGuard {
      */
     function withdraw(uint256 amount, address to) external nonReentrant whenNotPaused {
         if (amount == 0) revert ZeroAmount();
+        if (to == address(0)) revert ZeroAddress();
         if (balances[msg.sender] < amount) revert InsufficientBalance();
 
         balances[msg.sender] -= amount;
@@ -175,16 +172,6 @@ contract VaultV2 is ReentrancyGuard {
         usdc.safeTransfer(to, amount);
 
         emit LedgerTransfer(msg.sender, to, amount, LedgerReason.UserWithdraw);
-    }
-
-    /**
-     * @notice Approve a market/contract to spend from user's ledger
-     * @param market Address to approve (Exchange, BackstopRouter, or market)
-     * @param allowanceAmount Amount to approve
-     */
-    function approveMarket(address market, uint256 allowanceAmount) external {
-        allowances[msg.sender][market] = allowanceAmount;
-        emit MarketAllowanceSet(msg.sender, market, allowanceAmount);
     }
 
     // ============================================================
@@ -240,6 +227,49 @@ contract VaultV2 is ReentrancyGuard {
         totalBalances += amount;
 
         emit LedgerTransfer(address(this), to, amount, LedgerReason.ReleaseForRedeem);
+    }
+
+    /**
+     * @notice Release USDC from splitReserve with fee split to feePool
+     * @param to Address to credit (token holder)
+     * @param payout Gross USDC payout (before fee)
+     * @param fee Fee amount to route to feePool
+     * @dev Called ONLY by ShareToken during redeemPositions when resolutionFeeBps > 0
+     */
+    function releaseForRedeemWithFee(address to, uint256 payout, uint256 fee)
+        external onlyShareToken whenNotPaused
+    {
+        require(payout > fee, "fee >= payout");
+        if (payout == 0) revert ZeroAmount();
+        if (splitReserve < payout) revert InsufficientSplitReserve();
+
+        splitReserve -= payout;
+        uint256 netPayout = payout - fee;
+        balances[to] += netPayout;
+        totalBalances += netPayout;
+        feePool += fee;
+
+        emit LedgerTransfer(address(this), to, netPayout, LedgerReason.ReleaseForRedeem);
+        if (fee > 0) emit LedgerTransfer(address(this), address(this), fee, LedgerReason.AccumulateFee);
+    }
+
+    /**
+     * @notice Withdraw from feePool to a balance (ShareToken resolution fees)
+     * @param to Recipient (resolution fee recipient)
+     * @param amount Amount to withdraw
+     * @dev Called ONLY by ShareToken for resolution fee withdrawal
+     */
+    function withdrawFeePoolByShareToken(address to, uint256 amount)
+        external onlyShareToken whenNotPaused
+    {
+        if (amount == 0) revert ZeroAmount();
+        if (feePool < amount) revert InsufficientFeePool();
+
+        feePool -= amount;
+        balances[to] += amount;
+        totalBalances += amount;
+
+        emit LedgerTransfer(address(this), to, amount, LedgerReason.WithdrawFeePool);
     }
 
     // ============================================================
@@ -386,10 +416,6 @@ contract VaultV2 is ReentrancyGuard {
 
     function balanceOf(address account) external view returns (uint256) {
         return balances[account];
-    }
-
-    function allowance(address user, address market) external view returns (uint256) {
-        return allowances[user][market];
     }
 
     function usdcToken() external view returns (address) {

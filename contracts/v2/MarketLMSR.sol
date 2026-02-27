@@ -129,10 +129,16 @@ contract MarketLMSR is IERC1155Receiver, ERC165 {
 
     /**
      * @notice Set one-time configuration (called by Factory after EIP-1167 clone)
+     * @dev Only callable once. The factory field is set during this call, so we
+     *      cannot use onlyFactory modifier. Instead, the `configSet` flag ensures
+     *      this is a one-shot initialization — any subsequent call reverts.
      */
     function initConfig(MarketConfigV2 calldata mc) external {
-        // Allow factory OR first caller (for clone init)
         require(!configSet, "already configured");
+        require(mc.factory != address(0), "zero factory");
+        require(mc.vault != address(0), "zero vault");
+        require(mc.shareToken != address(0), "zero shareToken");
+        require(mc.backstopRouter != address(0), "zero backstopRouter");
         configSet = true;
 
         admin = mc.admin;
@@ -441,6 +447,8 @@ contract MarketLMSR is IERC1155Receiver, ERC165 {
 
         uint256 newCost = LMSRMath.calcCostUsdc(b, newQYes, newQNo);
 
+        // Guard against underflow from rounding: if newCost >= currentCost, no payout
+        if (newCost >= currentCost) return 0;
         return currentCost - newCost;
     }
 

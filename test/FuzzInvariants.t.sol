@@ -60,25 +60,25 @@ contract FuzzInvariantsTest is BaseV2Test {
 
         // Trade 1
         vm.prank(alice);
-        backstopRouter.executeTrade(cId, sideSeed % 2 == 0 ? Side.Yes : Side.No, true, a1, 0);
+        backstopRouter.executeTrade(cId, sideSeed % 2 == 0 ? Side.Yes : Side.No, true, a1, 0, 10000);
         _assertVaultInvariant("after trade 1");
         _assertPairInvariant(market, "after trade 1");
 
         // Trade 2
         vm.prank(bob);
-        backstopRouter.executeTrade(cId, sideSeed % 3 == 0 ? Side.Yes : Side.No, true, a2, 0);
+        backstopRouter.executeTrade(cId, sideSeed % 3 == 0 ? Side.Yes : Side.No, true, a2, 0, 10000);
         _assertVaultInvariant("after trade 2");
         _assertPairInvariant(market, "after trade 2");
 
         // Trade 3
         vm.prank(carol);
-        backstopRouter.executeTrade(cId, sideSeed % 5 == 0 ? Side.No : Side.Yes, true, a3, 0);
+        backstopRouter.executeTrade(cId, sideSeed % 5 == 0 ? Side.No : Side.Yes, true, a3, 0, 10000);
         _assertVaultInvariant("after trade 3");
         _assertPairInvariant(market, "after trade 3");
 
         // Trade 4
         vm.prank(alice);
-        backstopRouter.executeTrade(cId, sideSeed % 7 == 0 ? Side.No : Side.Yes, true, a4, 0);
+        backstopRouter.executeTrade(cId, sideSeed % 7 == 0 ? Side.No : Side.Yes, true, a4, 0, 10000);
         _assertVaultInvariant("after trade 4");
         _assertPairInvariant(market, "after trade 4");
         _assertPriceInvariant(market, "after trade 4");
@@ -96,7 +96,7 @@ contract FuzzInvariantsTest is BaseV2Test {
 
         // Buy
         vm.prank(alice);
-        uint256 shares = backstopRouter.executeTrade(cId, side, true, buyAmount, 0);
+        uint256 shares = backstopRouter.executeTrade(cId, side, true, buyAmount, 0, 10000);
         _assertVaultInvariant("after buy");
         _assertPairInvariant(market, "after buy");
 
@@ -108,7 +108,7 @@ contract FuzzInvariantsTest is BaseV2Test {
         shareToken.setApprovalForAll(address(backstopRouter), true);
 
         vm.prank(alice);
-        backstopRouter.executeTrade(cId, side, false, sellShares, 0);
+        backstopRouter.executeTrade(cId, side, false, sellShares, 0, 10000);
         _assertVaultInvariant("after sell");
         _assertPairInvariant(market, "after sell");
         _assertPriceInvariant(market, "after sell");
@@ -131,17 +131,17 @@ contract FuzzInvariantsTest is BaseV2Test {
 
         // Alice buys YES
         vm.prank(alice);
-        uint256 aliceShares = backstopRouter.executeTrade(cId, Side.Yes, true, a1, 0);
+        uint256 aliceShares = backstopRouter.executeTrade(cId, Side.Yes, true, a1, 0, 10000);
         _assertPairInvariant(market, "alice buy YES");
 
         // Bob buys NO
         vm.prank(bob);
-        backstopRouter.executeTrade(cId, Side.No, true, a2, 0);
+        backstopRouter.executeTrade(cId, Side.No, true, a2, 0, 10000);
         _assertPairInvariant(market, "bob buy NO");
 
         // Carol buys YES
         vm.prank(carol);
-        backstopRouter.executeTrade(cId, Side.Yes, true, a3, 0);
+        backstopRouter.executeTrade(cId, Side.Yes, true, a3, 0, 10000);
         _assertPairInvariant(market, "carol buy YES");
 
         // Alice sells portion of YES
@@ -151,7 +151,7 @@ contract FuzzInvariantsTest is BaseV2Test {
         vm.prank(alice);
         shareToken.setApprovalForAll(address(backstopRouter), true);
         vm.prank(alice);
-        backstopRouter.executeTrade(cId, Side.Yes, false, sellShares, 0);
+        backstopRouter.executeTrade(cId, Side.Yes, false, sellShares, 0, 10000);
         _assertPairInvariant(market, "alice sell YES");
         _assertVaultInvariant("after multi-user trades");
     }
@@ -185,7 +185,7 @@ contract FuzzInvariantsTest is BaseV2Test {
 
         // Create bias with prior trade
         vm.prank(bob);
-        backstopRouter.executeTrade(cId, priorIsYes ? Side.Yes : Side.No, true, priorBuy, 0);
+        backstopRouter.executeTrade(cId, priorIsYes ? Side.Yes : Side.No, true, priorBuy, 0, 10000);
 
         // Quote after bias
         Side side = testIsYes ? Side.Yes : Side.No;
@@ -213,13 +213,13 @@ contract FuzzInvariantsTest is BaseV2Test {
 
         // Trades
         vm.prank(alice);
-        backstopRouter.executeTrade(cId, Side.Yes, true, a1, 0);
+        backstopRouter.executeTrade(cId, Side.Yes, true, a1, 0, 10000);
 
         vm.prank(bob);
-        backstopRouter.executeTrade(cId, Side.No, true, a2, 0);
+        backstopRouter.executeTrade(cId, Side.No, true, a2, 0, 10000);
 
         vm.prank(carol);
-        backstopRouter.executeTrade(cId, Side.Yes, true, a3, 0);
+        backstopRouter.executeTrade(cId, Side.Yes, true, a3, 0, 10000);
 
         _assertVaultInvariant("before resolution");
         _assertPairInvariant(market, "before resolution");
@@ -274,7 +274,7 @@ contract FuzzInvariantsTest is BaseV2Test {
 
         // Buy
         vm.prank(bob);
-        backstopRouter.executeTrade(cId, Side.Yes, true, buyAmt, 0);
+        backstopRouter.executeTrade(cId, Side.Yes, true, buyAmt, 0, 10000);
 
         _assertVaultInvariant("after buy at custom price");
         _assertPairInvariant(market, "after buy at custom price");

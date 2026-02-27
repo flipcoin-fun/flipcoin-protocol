@@ -57,7 +57,8 @@ contract Exchange is EIP712, ReentrancyGuard {
     DelegationRegistry public delegationRegistry;
 
     bool public paused;
-    uint256 public protocolFeeBps; // Default: 50 (0.5%)
+    uint256 public makerFeeBps;  // Default: 0
+    uint256 public takerFeeBps;  // Default: 50 (0.5%)
     address public protocolFeeRecipient;
 
     /// @notice Per-condition creator fee (immutable once set by Factory)
@@ -136,6 +137,9 @@ contract Exchange is EIP712, ReentrancyGuard {
     error CreatorFeeAlreadySet();
     error InvalidTaker();
     error ZeroFillAmount();
+    error UndercollateralizedMint();
+    error InvalidPrice();
+    error CreatorFeeTooHigh();
 
     // ============================================================
     // Modifiers
@@ -157,7 +161,8 @@ contract Exchange is EIP712, ReentrancyGuard {
         address _vault,
         address _delegationRegistry,
         address _protocolFeeRecipient,
-        uint256 _protocolFeeBps
+        uint256 _makerFeeBps,
+        uint256 _takerFeeBps
     ) EIP712("FlipCoinExchange", "1") {
         require(_admin != address(0) && _operator != address(0), "zero addr");
         admin = _admin;
@@ -166,7 +171,8 @@ contract Exchange is EIP712, ReentrancyGuard {
         vault = VaultV2(_vault);
         delegationRegistry = DelegationRegistry(_delegationRegistry);
         protocolFeeRecipient = _protocolFeeRecipient;
-        protocolFeeBps = _protocolFeeBps;
+        makerFeeBps = _makerFeeBps;
+        takerFeeBps = _takerFeeBps;
     }
 
     // ============================================================
@@ -218,13 +224,14 @@ contract Exchange is EIP712, ReentrancyGuard {
         // Validate match type
         _validateMatchType(takerOrder, makerOrder, matchType);
 
-        // Calculate fees
-        uint256 totalFee = _getTotalFeeBps(conditionId);
-        _checkMaxFee(takerOrder, totalFee);
-        _checkMaxFee(makerOrder, totalFee);
+        // Calculate asymmetric fees (taker pays more than maker)
+        uint256 takerTotalFee = _getTakerTotalFeeBps(conditionId);
+        uint256 makerTotalFee = _getMakerTotalFeeBps(conditionId);
+        _checkMaxFee(takerOrder, takerTotalFee);
+        _checkMaxFee(makerOrder, makerTotalFee);
 
         // Execute settlement
-        _settle(takerOrder, makerOrder, fillAmount, matchType, conditionId, totalFee);
+        _settle(takerOrder, makerOrder, fillAmount, matchType, conditionId, takerTotalFee, makerTotalFee);
 
         // Update fill amounts
         ordersFilled[takerHash] += fillAmount;
@@ -291,11 +298,13 @@ contract Exchange is EIP712, ReentrancyGuard {
 
     /**
      * @notice Set creator fee for a condition (IMMUTABLE, once only)
+     * @dev [L-5] Creator fee capped at 500 bps (5%) to prevent excessive fees
      */
     function setCreatorFee(bytes32 conditionId, address creator, uint256 feeBps)
         external onlyFactory
     {
         if (creatorFeeSet[conditionId]) revert CreatorFeeAlreadySet();
+        if (feeBps > 500) revert CreatorFeeTooHigh();
         creatorFeeBps[conditionId] = feeBps;
         creatorFeeRecipient[conditionId] = creator;
         creatorFeeSet[conditionId] = true;
@@ -352,9 +361,10 @@ contract Exchange is EIP712, ReentrancyGuard {
         factory = _factory;
     }
 
-    function setProtocolFeeBps(uint256 _feeBps) external onlyAdmin {
-        require(_feeBps <= 500, "fee too high"); // Max 5%
-        protocolFeeBps = _feeBps;
+    function setFees(uint16 _makerFeeBps, uint16 _takerFeeBps) external onlyAdmin {
+        require(uint256(_makerFeeBps) + uint256(_takerFeeBps) <= 500, "fee too high");
+        makerFeeBps = _makerFeeBps;
+        takerFeeBps = _takerFeeBps;
     }
 
     function pause() external onlyAdmin { paused = true; }
@@ -457,14 +467,15 @@ contract Exchange is EIP712, ReentrancyGuard {
         uint256 fillAmount,
         MatchType matchType,
         bytes32 conditionId,
-        uint256 totalFee
+        uint256 takerTotalFee,
+        uint256 makerTotalFee
     ) internal {
         if (matchType == MatchType.COMPLEMENTARY) {
-            _settleComplementary(takerOrder, makerOrder, fillAmount, totalFee, conditionId);
+            _settleComplementary(takerOrder, makerOrder, fillAmount, takerTotalFee, makerTotalFee, conditionId);
         } else if (matchType == MatchType.MINT) {
-            _settleMint(takerOrder, makerOrder, fillAmount, totalFee, conditionId);
+            _settleMint(takerOrder, makerOrder, fillAmount, takerTotalFee, makerTotalFee, conditionId);
         } else {
-            _settleMerge(takerOrder, makerOrder, fillAmount, totalFee, conditionId);
+            _settleMerge(takerOrder, makerOrder, fillAmount, takerTotalFee, makerTotalFee, conditionId);
         }
     }
 
@@ -472,12 +483,16 @@ contract Exchange is EIP712, ReentrancyGuard {
         Order calldata buyer,
         Order calldata seller,
         uint256 fillAmount,
-        uint256 totalFeeBps_,
+        uint256 takerTotalFeeBps_,
+        uint256 makerTotalFeeBps_,
         bytes32 conditionId
     ) internal {
         uint256 priceBps = _getPriceBuy(buyer);
+        // [H-2] Validate price is within sane bounds (share price < $1)
+        if (priceBps == 0 || priceBps >= BPS) revert InvalidPrice();
         uint256 usdcAmount = fillAmount * priceBps / BPS;
-        uint256 fee = _calculateFee(totalFeeBps_, priceBps, fillAmount);
+        uint256 takerFee = _calculateFee(takerTotalFeeBps_, priceBps, fillAmount);
+        uint256 makerFee = _calculateFee(makerTotalFeeBps_, priceBps, fillAmount);
 
         // Buyer pays USDC to seller
         vault.transferBetween(buyer.maker, seller.maker, usdcAmount);
@@ -485,28 +500,34 @@ contract Exchange is EIP712, ReentrancyGuard {
         // Seller transfers shares to buyer
         shareToken.safeTransferFrom(seller.maker, buyer.maker, buyer.tokenId, fillAmount, "");
 
-        // Collect fees from both sides
-        _collectFees(buyer.maker, seller.maker, fee, conditionId);
+        // Collect asymmetric fees
+        _collectFeesAsymmetric(buyer.maker, seller.maker, takerFee, makerFee, takerTotalFeeBps_, makerTotalFeeBps_, conditionId);
 
-        _emitFills(buyer, seller, fillAmount, usdcAmount, fee);
+        _emitFills(buyer, seller, fillAmount, usdcAmount, takerFee, usdcAmount, makerFee);
     }
 
     function _settleMint(
         Order calldata buyer1,
         Order calldata buyer2,
         uint256 fillAmount,
-        uint256 totalFeeBps_,
+        uint256 takerTotalFeeBps_,
+        uint256 makerTotalFeeBps_,
         bytes32 conditionId
     ) internal {
         uint256 price1 = _getPriceBuy(buyer1);
         uint256 price2 = _getPriceBuy(buyer2);
+        // [H-2] Validate prices are within sane bounds
+        if (price1 == 0 || price1 >= BPS) revert InvalidPrice();
+        if (price2 == 0 || price2 >= BPS) revert InvalidPrice();
+        // [C-1] Ensure MINT is fully collateralized: price1 + price2 >= BPS
+        // Without this, splitReserve would be underfunded and vault becomes insolvent
+        if (price1 + price2 < BPS) revert UndercollateralizedMint();
         uint256 usdc1 = fillAmount * price1 / BPS;
         uint256 usdc2 = fillAmount * price2 / BPS;
-        uint256 fee1 = _calculateFee(totalFeeBps_, price1, fillAmount);
-        uint256 fee2 = _calculateFee(totalFeeBps_, price2, fillAmount);
+        uint256 fee1 = _calculateFee(takerTotalFeeBps_, price1, fillAmount);
+        uint256 fee2 = _calculateFee(makerTotalFeeBps_, price2, fillAmount);
 
-        // Lock USDC for split (from both buyers combined = fillAmount in USDC face value)
-        // splitReserve needs fillAmount (1 share pair = $1)
+        // Lock USDC for split (from both buyers combined >= fillAmount face value)
         vault.lockForSplit(buyer1.maker, usdc1);
         vault.lockForSplit(buyer2.maker, usdc2);
 
@@ -517,25 +538,29 @@ contract Exchange is EIP712, ReentrancyGuard {
         shareToken.safeTransferFrom(address(this), buyer1.maker, buyer1.tokenId, fillAmount, "");
         shareToken.safeTransferFrom(address(this), buyer2.maker, buyer2.tokenId, fillAmount, "");
 
-        // Collect fees
-        _collectFees(buyer1.maker, buyer2.maker, (fee1 + fee2) / 2, conditionId);
+        // Collect asymmetric fees
+        _collectFeesAsymmetric(buyer1.maker, buyer2.maker, fee1, fee2, takerTotalFeeBps_, makerTotalFeeBps_, conditionId);
 
-        _emitFills(buyer1, buyer2, fillAmount, usdc1, fee1);
+        _emitFills(buyer1, buyer2, fillAmount, usdc1, fee1, usdc2, fee2);
     }
 
     function _settleMerge(
         Order calldata seller1,
         Order calldata seller2,
         uint256 fillAmount,
-        uint256 totalFeeBps_,
+        uint256 takerTotalFeeBps_,
+        uint256 makerTotalFeeBps_,
         bytes32 conditionId
     ) internal {
         uint256 price1 = _getPriceSell(seller1);
         uint256 price2 = _getPriceSell(seller2);
+        // [H-2] Validate prices are within sane bounds
+        if (price1 == 0 || price1 >= BPS) revert InvalidPrice();
+        if (price2 == 0 || price2 >= BPS) revert InvalidPrice();
         uint256 usdc1 = fillAmount * price1 / BPS;
         uint256 usdc2 = fillAmount * price2 / BPS;
-        uint256 fee1 = _calculateFee(totalFeeBps_, price1, fillAmount);
-        uint256 fee2 = _calculateFee(totalFeeBps_, price2, fillAmount);
+        uint256 fee1 = _calculateFee(takerTotalFeeBps_, price1, fillAmount);
+        uint256 fee2 = _calculateFee(makerTotalFeeBps_, price2, fillAmount);
 
         // Transfer shares from sellers to this contract
         shareToken.safeTransferFrom(seller1.maker, address(this), seller1.tokenId, fillAmount, "");
@@ -551,17 +576,25 @@ contract Exchange is EIP712, ReentrancyGuard {
 
         // Collect fees
         vault.accumulateFee(address(this), fee1 + fee2);
-        _recordFees(fee1 + fee2, conditionId);
+        _recordFeesPerSide(fee1, fee2, takerTotalFeeBps_, makerTotalFeeBps_, conditionId);
 
-        _emitFills(seller1, seller2, fillAmount, usdc1, fee1);
+        _emitFills(seller1, seller2, fillAmount, usdc1, fee1, usdc2, fee2);
     }
 
     // ============================================================
     // Internal — Fee Calculation
     // ============================================================
 
+    function _getMakerTotalFeeBps(bytes32 conditionId) internal view returns (uint256) {
+        return makerFeeBps + creatorFeeBps[conditionId];
+    }
+
+    function _getTakerTotalFeeBps(bytes32 conditionId) internal view returns (uint256) {
+        return takerFeeBps + creatorFeeBps[conditionId];
+    }
+
     function _getTotalFeeBps(bytes32 conditionId) internal view returns (uint256) {
-        return protocolFeeBps + creatorFeeBps[conditionId];
+        return makerFeeBps + takerFeeBps + creatorFeeBps[conditionId];
     }
 
     function _checkMaxFee(Order calldata order, uint256 totalFee) internal pure {
@@ -616,39 +649,55 @@ contract Exchange is EIP712, ReentrancyGuard {
         return order.takerAmount > order.makerAmount ? order.takerAmount : order.makerAmount;
     }
 
-    function _collectFees(
+    function _collectFeesAsymmetric(
         address from1,
         address from2,
-        uint256 feePerSide,
+        uint256 fee1,
+        uint256 fee2,
+        uint256 totalBps1,
+        uint256 totalBps2,
         bytes32 conditionId
     ) internal {
-        if (feePerSide > 0) {
-            vault.accumulateFee(from1, feePerSide);
-            vault.accumulateFee(from2, feePerSide);
-            _recordFees(feePerSide * 2, conditionId);
-        }
+        if (fee1 > 0) vault.accumulateFee(from1, fee1);
+        if (fee2 > 0) vault.accumulateFee(from2, fee2);
+        if (fee1 + fee2 > 0) _recordFeesPerSide(fee1, fee2, totalBps1, totalBps2, conditionId);
     }
 
-    function _recordFees(uint256 totalFee, bytes32 conditionId) internal {
-        uint256 total = _getTotalFeeBps(conditionId);
-        if (total == 0) return;
-        uint256 protocolShare = totalFee * protocolFeeBps / total;
-        uint256 creatorShare = totalFee - protocolShare;
-        protocolFeesAccumulated += protocolShare;
-        creatorFeesAccumulated[conditionId] += creatorShare;
+    function _recordFeesPerSide(
+        uint256 fee1Usdc,
+        uint256 fee2Usdc,
+        uint256 totalBps1,
+        uint256 totalBps2,
+        bytes32 conditionId
+    ) internal {
+        // Side 1 (taker): protocol portion = fee1 * takerFeeBps / totalBps1
+        uint256 protocol1 = totalBps1 > 0 ? fee1Usdc * takerFeeBps / totalBps1 : 0;
+        uint256 creator1 = fee1Usdc - protocol1;
+        // Side 2 (maker): protocol portion = fee2 * makerFeeBps / totalBps2
+        uint256 protocol2 = totalBps2 > 0 ? fee2Usdc * makerFeeBps / totalBps2 : 0;
+        uint256 creator2 = fee2Usdc - protocol2;
+
+        protocolFeesAccumulated += protocol1 + protocol2;
+        creatorFeesAccumulated[conditionId] += creator1 + creator2;
     }
 
+    /**
+     * @notice Emit fill events with per-order USDC and fee amounts
+     * @dev [L-4] Each order gets its own usdcAmount and fee to avoid misleading events
+     */
     function _emitFills(
         Order calldata order1,
         Order calldata order2,
         uint256 fillAmount,
-        uint256 usdcAmount,
-        uint256 fee
+        uint256 usdcAmount1,
+        uint256 fee1,
+        uint256 usdcAmount2,
+        uint256 fee2
     ) internal {
         bytes32 hash1 = _hashOrder(order1);
         bytes32 hash2 = _hashOrder(order2);
-        emit OrderFilled(hash1, order1.maker, order2.maker, order1.tokenId, fillAmount, usdcAmount, fee, order1.side);
-        emit OrderFilled(hash2, order2.maker, order1.maker, order2.tokenId, fillAmount, usdcAmount, fee, order2.side);
+        emit OrderFilled(hash1, order1.maker, order2.maker, order1.tokenId, fillAmount, usdcAmount1, fee1, order1.side);
+        emit OrderFilled(hash2, order2.maker, order1.maker, order2.tokenId, fillAmount, usdcAmount2, fee2, order2.side);
     }
 
     // ============================================================

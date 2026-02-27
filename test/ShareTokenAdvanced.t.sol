@@ -30,7 +30,7 @@ contract ShareTokenAdvancedTest is BaseV2Test {
 
     function _buyShares(address buyer, Side side, uint256 amountUsdc) internal returns (uint256) {
         vm.prank(buyer);
-        return backstopRouter.executeTrade(conditionId, side, true, amountUsdc, 0);
+        return backstopRouter.executeTrade(conditionId, side, true, amountUsdc, 0, 10000);
     }
 
     function _warpPastDeadline() internal {

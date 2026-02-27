@@ -181,6 +181,97 @@ contract VaultV2Test is Test {
         assertEq(vault.balances(alice), 100_000_000);
     }
 
+    // ============================================================
+    // releaseForRedeemWithFee
+    // ============================================================
+
+    function test_releaseForRedeemWithFee_accounting() public {
+        vm.prank(alice);
+        vault.deposit(100_000_000);
+
+        // Lock into splitReserve
+        vm.prank(exchange);
+        vault.lockForSplit(alice, 50_000_000);
+
+        uint256 payout = 30_000_000;
+        uint256 fee = 75_000; // 0.25% of 30M
+
+        uint256 splitBefore = vault.splitReserve();
+        uint256 feeBefore = vault.feePool();
+        uint256 bobBalBefore = vault.balances(bob);
+
+        vm.prank(shareToken);
+        vault.releaseForRedeemWithFee(bob, payout, fee);
+
+        assertEq(vault.splitReserve(), splitBefore - payout, "splitReserve should decrease by payout");
+        assertEq(vault.feePool(), feeBefore + fee, "feePool should increase by fee");
+        assertEq(vault.balances(bob), bobBalBefore + payout - fee, "bob should receive net payout");
+
+        // Invariant: USDC == totalBalances + splitReserve + feePool
+        uint256 usdcBal = usdc.balanceOf(address(vault));
+        uint256 accounting = vault.totalBalances() + vault.splitReserve() + vault.feePool();
+        assertEq(usdcBal, accounting, "invariant should hold after releaseForRedeemWithFee");
+    }
+
+    function test_releaseForRedeemWithFee_feeExceedsPayout_reverts() public {
+        vm.prank(alice);
+        vault.deposit(100_000_000);
+
+        vm.prank(exchange);
+        vault.lockForSplit(alice, 50_000_000);
+
+        // fee >= payout should revert
+        vm.prank(shareToken);
+        vm.expectRevert("fee >= payout");
+        vault.releaseForRedeemWithFee(bob, 1000, 1000);
+    }
+
+    function test_releaseForRedeemWithFee_onlyShareToken() public {
+        vm.prank(alice);
+        vault.deposit(100_000_000);
+
+        vm.prank(exchange);
+        vault.lockForSplit(alice, 50_000_000);
+
+        // Non-shareToken should revert
+        vm.prank(alice);
+        vm.expectRevert();
+        vault.releaseForRedeemWithFee(bob, 10_000_000, 25_000);
+    }
+
+    // ============================================================
+    // withdrawFeePoolByShareToken
+    // ============================================================
+
+    function test_withdrawFeePoolByShareToken() public {
+        vm.prank(alice);
+        vault.deposit(100_000_000);
+
+        // Accumulate fee via exchange
+        vm.prank(exchange);
+        vault.accumulateFee(alice, 5_000_000);
+
+        uint256 feeBefore = vault.feePool();
+        uint256 bobBalBefore = vault.balances(bob);
+
+        vm.prank(shareToken);
+        vault.withdrawFeePoolByShareToken(bob, 3_000_000);
+
+        assertEq(vault.feePool(), feeBefore - 3_000_000, "feePool should decrease");
+        assertEq(vault.balances(bob), bobBalBefore + 3_000_000, "bob should receive withdrawal");
+    }
+
+    function test_withdrawFeePoolByShareToken_insufficientFeePool() public {
+        // No fees accumulated — should revert
+        vm.prank(shareToken);
+        vm.expectRevert();
+        vault.withdrawFeePoolByShareToken(bob, 1_000_000);
+    }
+
+    // ============================================================
+    // Invariant
+    // ============================================================
+
     function test_invariant_holds() public {
         vm.prank(alice);
         vault.deposit(100_000_000);

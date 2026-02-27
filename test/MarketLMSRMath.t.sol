@@ -53,7 +53,7 @@ contract MarketLMSRMathTest is BaseV2Test {
         (uint256 priceBefore,) = lmsr.getPrices();
 
         vm.prank(bob);
-        backstopRouter.executeTrade(conditionId, Side.Yes, true, 10_000_000, 0);
+        backstopRouter.executeTrade(conditionId, Side.Yes, true, 10_000_000, 0, 10000);
 
         (uint256 priceAfter,) = lmsr.getPrices();
         assertGt(priceAfter, priceBefore, "YES price should increase after buying YES");
@@ -66,7 +66,7 @@ contract MarketLMSRMathTest is BaseV2Test {
         (uint256 priceBefore,) = lmsr.getPrices();
 
         vm.prank(bob);
-        backstopRouter.executeTrade(conditionId, Side.No, true, 10_000_000, 0);
+        backstopRouter.executeTrade(conditionId, Side.No, true, 10_000_000, 0, 10000);
 
         (uint256 priceAfter,) = lmsr.getPrices();
         assertLt(priceAfter, priceBefore, "YES price should decrease after buying NO");
@@ -79,7 +79,7 @@ contract MarketLMSRMathTest is BaseV2Test {
         // Buy lots of YES to push price high
         for (uint256 i = 0; i < 5; i++) {
             vm.prank(bob);
-            backstopRouter.executeTrade(conditionId, Side.Yes, true, 20_000_000, 0);
+            backstopRouter.executeTrade(conditionId, Side.Yes, true, 20_000_000, 0, 10000);
         }
 
         (uint256 priceYes, uint256 priceNo) = lmsr.getPrices();
@@ -104,7 +104,7 @@ contract MarketLMSRMathTest is BaseV2Test {
         uint256 net = buyAmount - fee;
 
         vm.prank(bob);
-        uint256 sharesOut = backstopRouter.executeTrade(conditionId, Side.Yes, true, buyAmount, 0);
+        uint256 sharesOut = backstopRouter.executeTrade(conditionId, Side.Yes, true, buyAmount, 0, 10000);
 
         // Polymarket guarantee: sharesOut >= net
         assertGe(sharesOut, net, "shares should be >= net USDC (Polymarket guarantee)");
@@ -121,12 +121,12 @@ contract MarketLMSRMathTest is BaseV2Test {
 
         // Buy YES (expensive side)
         vm.prank(bob);
-        uint256 sharesYes = backstopRouter.executeTrade(conditionId, Side.Yes, true, buyAmount, 0);
+        uint256 sharesYes = backstopRouter.executeTrade(conditionId, Side.Yes, true, buyAmount, 0, 10000);
         assertGe(sharesYes, net, "YES shares should be >= net (Polymarket guarantee)");
 
         // Buy NO (cheap side) — should get even more
         vm.prank(carol);
-        uint256 sharesNo = backstopRouter.executeTrade(conditionId, Side.No, true, buyAmount, 0);
+        uint256 sharesNo = backstopRouter.executeTrade(conditionId, Side.No, true, buyAmount, 0, 10000);
         assertGe(sharesNo, net, "NO shares should be >= net (Polymarket guarantee)");
     }
 
@@ -139,7 +139,7 @@ contract MarketLMSRMathTest is BaseV2Test {
         uint256 net = amount - fee;
 
         vm.prank(bob);
-        uint256 sharesOut = backstopRouter.executeTrade(conditionId, Side.Yes, true, amount, 0);
+        uint256 sharesOut = backstopRouter.executeTrade(conditionId, Side.Yes, true, amount, 0, 10000);
 
         assertGe(sharesOut, net, "fuzz: Polymarket guarantee violated");
     }
@@ -155,11 +155,11 @@ contract MarketLMSRMathTest is BaseV2Test {
 
         // First buy
         vm.prank(bob);
-        uint256 shares1 = backstopRouter.executeTrade(conditionId, Side.Yes, true, buyAmount, 0);
+        uint256 shares1 = backstopRouter.executeTrade(conditionId, Side.Yes, true, buyAmount, 0, 10000);
 
         // Second buy (price is now higher)
         vm.prank(bob);
-        uint256 shares2 = backstopRouter.executeTrade(conditionId, Side.Yes, true, buyAmount, 0);
+        uint256 shares2 = backstopRouter.executeTrade(conditionId, Side.Yes, true, buyAmount, 0, 10000);
 
         assertGt(shares1, shares2, "should get fewer shares at higher price");
     }
@@ -170,7 +170,7 @@ contract MarketLMSRMathTest is BaseV2Test {
         uint256 yesId = lmsr.yesTokenId();
 
         vm.prank(bob);
-        uint256 sharesOut = backstopRouter.executeTrade(conditionId, Side.Yes, true, 10_000_000, 0);
+        uint256 sharesOut = backstopRouter.executeTrade(conditionId, Side.Yes, true, 10_000_000, 0, 10000);
 
         assertEq(shareToken.balanceOf(bob, yesId), sharesOut, "ERC-1155 balance should match");
     }
@@ -187,7 +187,7 @@ contract MarketLMSRMathTest is BaseV2Test {
         // Buy YES
         uint256 buyAmount = 10_000_000;
         vm.prank(bob);
-        uint256 sharesOut = backstopRouter.executeTrade(conditionId, Side.Yes, true, buyAmount, 0);
+        uint256 sharesOut = backstopRouter.executeTrade(conditionId, Side.Yes, true, buyAmount, 0, 10000);
 
         // Approve BackstopRouter
         vm.prank(bob);
@@ -198,7 +198,7 @@ contract MarketLMSRMathTest is BaseV2Test {
 
         // Sell all shares
         vm.prank(bob);
-        uint256 usdcOut = backstopRouter.executeTrade(conditionId, Side.Yes, false, sharesOut, 0);
+        uint256 usdcOut = backstopRouter.executeTrade(conditionId, Side.Yes, false, sharesOut, 0, 10000);
 
         // Should receive positive USDC
         assertGt(usdcOut, 0, "should receive USDC from sell");
@@ -216,7 +216,7 @@ contract MarketLMSRMathTest is BaseV2Test {
 
         // Buy YES
         vm.prank(bob);
-        uint256 sharesOut = backstopRouter.executeTrade(conditionId, Side.Yes, true, 10_000_000, 0);
+        uint256 sharesOut = backstopRouter.executeTrade(conditionId, Side.Yes, true, 10_000_000, 0, 10000);
 
         (uint256 priceBefore,) = lmsr.getPrices();
 
@@ -225,7 +225,7 @@ contract MarketLMSRMathTest is BaseV2Test {
         shareToken.setApprovalForAll(address(backstopRouter), true);
 
         vm.prank(bob);
-        backstopRouter.executeTrade(conditionId, Side.Yes, false, sharesOut, 0);
+        backstopRouter.executeTrade(conditionId, Side.Yes, false, sharesOut, 0, 10000);
 
         (uint256 priceAfter,) = lmsr.getPrices();
         assertLt(priceAfter, priceBefore, "YES price should decrease after selling YES");
@@ -239,14 +239,14 @@ contract MarketLMSRMathTest is BaseV2Test {
 
         // Buy YES
         vm.prank(bob);
-        uint256 sharesOut = backstopRouter.executeTrade(conditionId, Side.Yes, true, buyAmount, 0);
+        uint256 sharesOut = backstopRouter.executeTrade(conditionId, Side.Yes, true, buyAmount, 0, 10000);
 
         // Sell YES
         vm.prank(bob);
         shareToken.setApprovalForAll(address(backstopRouter), true);
 
         vm.prank(bob);
-        backstopRouter.executeTrade(conditionId, Side.Yes, false, sharesOut, 0);
+        backstopRouter.executeTrade(conditionId, Side.Yes, false, sharesOut, 0, 10000);
 
         uint256 bobBalEnd = vault.balances(bob);
 
@@ -305,13 +305,13 @@ contract MarketLMSRMathTest is BaseV2Test {
 
         // Multiple buys on both sides
         vm.prank(bob);
-        backstopRouter.executeTrade(conditionId, Side.Yes, true, 20_000_000, 0);
+        backstopRouter.executeTrade(conditionId, Side.Yes, true, 20_000_000, 0, 10000);
 
         vm.prank(carol);
-        backstopRouter.executeTrade(conditionId, Side.No, true, 15_000_000, 0);
+        backstopRouter.executeTrade(conditionId, Side.No, true, 15_000_000, 0, 10000);
 
         vm.prank(bob);
-        backstopRouter.executeTrade(conditionId, Side.Yes, true, 10_000_000, 0);
+        backstopRouter.executeTrade(conditionId, Side.Yes, true, 10_000_000, 0, 10000);
 
         // Vault invariant: USDC.balanceOf(vault) >= totalBalances + splitReserve + feePool
         uint256 usdcBalance = usdc.balanceOf(address(vault));
@@ -324,14 +324,14 @@ contract MarketLMSRMathTest is BaseV2Test {
 
         // Buy YES
         vm.prank(bob);
-        uint256 shares = backstopRouter.executeTrade(conditionId, Side.Yes, true, 20_000_000, 0);
+        uint256 shares = backstopRouter.executeTrade(conditionId, Side.Yes, true, 20_000_000, 0, 10000);
 
         // Sell half
         vm.prank(bob);
         shareToken.setApprovalForAll(address(backstopRouter), true);
 
         vm.prank(bob);
-        backstopRouter.executeTrade(conditionId, Side.Yes, false, shares / 2, 0);
+        backstopRouter.executeTrade(conditionId, Side.Yes, false, shares / 2, 0, 10000);
 
         uint256 usdcBalance = usdc.balanceOf(address(vault));
         uint256 accounting = vault.totalBalances() + vault.splitReserve() + vault.feePool();
@@ -351,7 +351,7 @@ contract MarketLMSRMathTest is BaseV2Test {
         Side side = isYes ? Side.Yes : Side.No;
 
         vm.prank(bob);
-        backstopRouter.executeTrade(conditionId, side, true, buyAmount, 0);
+        backstopRouter.executeTrade(conditionId, side, true, buyAmount, 0, 10000);
 
         (uint256 priceYes, uint256 priceNo) = lmsr.getPrices();
         assertEq(priceYes + priceNo, 10000, "fuzz: prices should always sum to 10000");
@@ -366,10 +366,10 @@ contract MarketLMSRMathTest is BaseV2Test {
         (address market, bytes32 conditionId) = _createDefaultMarket(alice);
 
         vm.prank(bob);
-        backstopRouter.executeTrade(conditionId, Side.Yes, true, amount1, 0);
+        backstopRouter.executeTrade(conditionId, Side.Yes, true, amount1, 0, 10000);
 
         vm.prank(carol);
-        backstopRouter.executeTrade(conditionId, Side.No, true, amount2, 0);
+        backstopRouter.executeTrade(conditionId, Side.No, true, amount2, 0, 10000);
 
         uint256 usdcBalance = usdc.balanceOf(address(vault));
         uint256 accounting = vault.totalBalances() + vault.splitReserve() + vault.feePool();
@@ -385,7 +385,7 @@ contract MarketLMSRMathTest is BaseV2Test {
 
         // MIN_TRADE_USDC = 10_000 (0.01 USDC)
         vm.prank(bob);
-        uint256 shares = backstopRouter.executeTrade(conditionId, Side.Yes, true, 10_000, 0);
+        uint256 shares = backstopRouter.executeTrade(conditionId, Side.Yes, true, 10_000, 0, 10000);
         assertGt(shares, 0, "min trade should still produce shares");
     }
 
@@ -394,7 +394,7 @@ contract MarketLMSRMathTest is BaseV2Test {
 
         // Large trade: 1000 USDC
         vm.prank(bob);
-        uint256 shares = backstopRouter.executeTrade(conditionId, Side.Yes, true, 1_000_000_000, 0);
+        uint256 shares = backstopRouter.executeTrade(conditionId, Side.Yes, true, 1_000_000_000, 0, 10000);
         assertGt(shares, 0, "large trade should produce shares");
     }
 
@@ -406,10 +406,10 @@ contract MarketLMSRMathTest is BaseV2Test {
 
         // Bob buys YES, Carol buys NO
         vm.prank(bob);
-        backstopRouter.executeTrade(conditionId, Side.Yes, true, 10_000_000, 0);
+        backstopRouter.executeTrade(conditionId, Side.Yes, true, 10_000_000, 0, 10000);
 
         vm.prank(carol);
-        backstopRouter.executeTrade(conditionId, Side.No, true, 10_000_000, 0);
+        backstopRouter.executeTrade(conditionId, Side.No, true, 10_000_000, 0, 10000);
 
         assertGt(shareToken.balanceOf(bob, yesId), 0, "bob should have YES");
         assertGt(shareToken.balanceOf(carol, noId), 0, "carol should have NO");
@@ -485,7 +485,7 @@ contract MarketLMSRMathTest is BaseV2Test {
 
         // Buy first to have shares to sell
         vm.prank(alice);
-        backstopRouter.executeTrade(cId, Side.Yes, true, 10_000_000, 0);
+        backstopRouter.executeTrade(cId, Side.Yes, true, 10_000_000, 0, 10000);
 
         (uint256 amountOut, uint256 fee) = MarketLMSR(market).quoteSell(Side.Yes, 5_000_000);
         assertTrue(amountOut > 0, "quoteSell should return amount > 0");
@@ -500,7 +500,7 @@ contract MarketLMSRMathTest is BaseV2Test {
 
         // Actual trade
         vm.prank(alice);
-        uint256 actualShares = backstopRouter.executeTrade(cId, Side.Yes, true, 5_000_000, 0);
+        uint256 actualShares = backstopRouter.executeTrade(cId, Side.Yes, true, 5_000_000, 0, 10000);
 
         assertEq(quotedShares, actualShares, "quote must match actual trade");
     }
@@ -510,7 +510,7 @@ contract MarketLMSRMathTest is BaseV2Test {
 
         // Buy shares first
         vm.prank(alice);
-        uint256 boughtShares = backstopRouter.executeTrade(cId, Side.Yes, true, 10_000_000, 0);
+        uint256 boughtShares = backstopRouter.executeTrade(cId, Side.Yes, true, 10_000_000, 0, 10000);
 
         // Quote sell
         uint256 sellAmount = boughtShares / 2;
@@ -522,7 +522,7 @@ contract MarketLMSRMathTest is BaseV2Test {
 
         // Actual sell
         vm.prank(alice);
-        uint256 actualAmount = backstopRouter.executeTrade(cId, Side.Yes, false, sellAmount, 0);
+        uint256 actualAmount = backstopRouter.executeTrade(cId, Side.Yes, false, sellAmount, 0, 10000);
 
         assertEq(quotedAmount, actualAmount, "quoteSell must match actual sell");
     }

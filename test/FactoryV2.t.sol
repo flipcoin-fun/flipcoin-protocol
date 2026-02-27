@@ -163,7 +163,7 @@ contract FactoryV2Test is BaseV2Test {
         assertEq(lmsr.question(), params.question, "question should match");
         assertEq(lmsr.totalFeeBps(), DEFAULT_TOTAL_FEE_BPS, "totalFeeBps should match");
         assertEq(lmsr.creatorFeeBps(), DEFAULT_CREATOR_FEE_BPS, "creatorFeeBps should match");
-        assertEq(lmsr.protocolFeeBps(), DEFAULT_PROTOCOL_FEE_BPS, "protocolFeeBps should match");
+        assertEq(lmsr.protocolFeeBps(), DEFAULT_MAKER_FEE_BPS + DEFAULT_TAKER_FEE_BPS, "protocolFeeBps should match");
 
         // Token IDs are valid and distinct
         bytes32 conditionId = lmsr.conditionId();

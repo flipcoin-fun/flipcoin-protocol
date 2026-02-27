@@ -38,7 +38,7 @@ contract ShareTokenTest is BaseV2Test {
     /// @dev Buy shares for a user via BackstopRouter.executeTrade
     function _buyShares(address buyer, Side side, uint256 amountUsdc) internal returns (uint256 sharesOut) {
         vm.prank(buyer);
-        sharesOut = backstopRouter.executeTrade(conditionId, side, true, amountUsdc, 0);
+        sharesOut = backstopRouter.executeTrade(conditionId, side, true, amountUsdc, 0, 10000);
     }
 
     /// @dev Advance time past the market deadline
@@ -46,9 +46,9 @@ contract ShareTokenTest is BaseV2Test {
         vm.warp(marketDeadline + 1);
     }
 
-    /// @dev Advance time past deadline + ADMIN_RESOLVE_WINDOW (6h)
+    /// @dev Advance time past deadline + ADMIN_RESOLVE_WINDOW (24h)
     function _warpPastAdminWindow() internal {
-        vm.warp(marketDeadline + 6 hours + 1);
+        vm.warp(marketDeadline + 24 hours + 1);
     }
 
     /// @dev Propose resolution as admin (oracle)
@@ -102,7 +102,7 @@ contract ShareTokenTest is BaseV2Test {
         vm.prank(bob);
         shareToken.setApprovalForAll(address(backstopRouter), true);
         vm.prank(bob);
-        backstopRouter.executeTrade(conditionId, Side.Yes, false, bobYes, 0);
+        backstopRouter.executeTrade(conditionId, Side.Yes, false, bobYes, 0, 10000);
 
         // Invariant still holds
         totalYes = shareToken.totalSupply(yesTokenId);
@@ -131,7 +131,7 @@ contract ShareTokenTest is BaseV2Test {
         // Try to buy (which triggers split) → should revert
         vm.prank(carol);
         vm.expectRevert("not open");
-        backstopRouter.executeTrade(conditionId, Side.Yes, true, 5_000_000, 0);
+        backstopRouter.executeTrade(conditionId, Side.Yes, true, 5_000_000, 0, 10000);
     }
 
     // ============================================================
@@ -155,7 +155,7 @@ contract ShareTokenTest is BaseV2Test {
         // Try to sell (which triggers merge) → should revert
         vm.prank(bob);
         vm.expectRevert("not open");
-        backstopRouter.executeTrade(conditionId, Side.Yes, false, sharesOut, 0);
+        backstopRouter.executeTrade(conditionId, Side.Yes, false, sharesOut, 0, 10000);
     }
 
     // ============================================================
@@ -419,11 +419,11 @@ contract ShareTokenTest is BaseV2Test {
         assertEq(r.payoutPerShare, 500_000, "payout should be $0.50");
     }
 
-    function test_markAsInvalid_revertsBefore6h() public {
+    function test_markAsInvalid_revertsBefore24h() public {
         _setupMarket();
         _buyShares(bob, Side.Yes, 10_000_000);
 
-        // Warp past deadline but NOT past 6h window
+        // Warp past deadline but NOT past 24h window
         _warpPastDeadline();
 
         vm.expectRevert("invalid window not reached");
@@ -775,7 +775,7 @@ contract ShareTokenTest is BaseV2Test {
         _proposeResolution(Outcome.Yes);
 
         // Warp past admin window
-        vm.warp(marketDeadline + 6 hours + 1);
+        vm.warp(marketDeadline + 24 hours + 1);
 
         // markAsInvalid should revert when Pending (blocks dispute bypass)
         vm.expectRevert(ShareToken.ResolutionNotOpen.selector);
@@ -794,7 +794,7 @@ contract ShareTokenTest is BaseV2Test {
         shareToken.disputeResolution(conditionId);
 
         // Status is back to Open — now markAsInvalid should work
-        vm.warp(marketDeadline + 6 hours + 1);
+        vm.warp(marketDeadline + 24 hours + 1);
         shareToken.markAsInvalid(conditionId);
 
         Resolution memory r = shareToken.getResolution(conditionId);
@@ -883,5 +883,151 @@ contract ShareTokenTest is BaseV2Test {
 
         // Vault invariant should hold
         assertTrue(vault.checkInvariant(), "vault invariant should hold after redemption");
+    }
+
+    // ============================================================
+    // 10. Resolution Fee
+    // ============================================================
+
+    function test_redeem_withZeroFee_defaultBehavior() public {
+        _setupMarket();
+
+        // Default: resolutionFeeBps = 0
+        assertEq(shareToken.resolutionFeeBps(), 0, "default fee should be 0");
+
+        _buyShares(bob, Side.Yes, 10_000_000);
+        uint256 yesShares = shareToken.balanceOf(bob, yesTokenId);
+
+        _warpPastDeadline();
+        _resolveMarket(Outcome.Yes);
+
+        uint256 balBefore = vault.balances(bob);
+        vm.prank(bob);
+        shareToken.redeemPositions(conditionId);
+
+        uint256 payout = vault.balances(bob) - balBefore;
+        // With 0 fee, payout should equal full share value
+        assertEq(payout, yesShares, "payout should equal shares with zero fee");
+    }
+
+    function test_redeem_withResolutionFee_correctPayout() public {
+        _setupMarket();
+
+        // Admin enables 25 bps resolution fee
+        vm.prank(admin);
+        shareToken.setResolutionFeeBps(25);
+
+        _buyShares(bob, Side.Yes, 10_000_000);
+        uint256 yesShares = shareToken.balanceOf(bob, yesTokenId);
+        assertTrue(yesShares > 0, "bob should have YES shares");
+
+        _warpPastDeadline();
+        _resolveMarket(Outcome.Yes);
+
+        uint256 expectedFee = yesShares * 25 / 10_000;
+        uint256 expectedNet = yesShares - expectedFee;
+
+        uint256 balBefore = vault.balances(bob);
+        vm.prank(bob);
+        shareToken.redeemPositions(conditionId);
+
+        uint256 payout = vault.balances(bob) - balBefore;
+        assertEq(payout, expectedNet, "payout should be shares minus fee");
+        assertEq(shareToken.resolutionFeesAccumulated(), expectedFee, "fees should accumulate");
+    }
+
+    function test_resolutionFee_accumulates() public {
+        _setupMarket();
+
+        vm.prank(admin);
+        shareToken.setResolutionFeeBps(25);
+
+        // Both buy YES
+        _buyShares(bob, Side.Yes, 10_000_000);
+        _buyShares(carol, Side.Yes, 5_000_000);
+
+        _warpPastDeadline();
+        _resolveMarket(Outcome.Yes);
+
+        uint256 bobShares = shareToken.balanceOf(bob, yesTokenId);
+        uint256 carolShares = shareToken.balanceOf(carol, yesTokenId);
+
+        vm.prank(bob);
+        shareToken.redeemPositions(conditionId);
+        uint256 feesAfterBob = shareToken.resolutionFeesAccumulated();
+        assertEq(feesAfterBob, bobShares * 25 / 10_000, "fees should accumulate from bob");
+
+        vm.prank(carol);
+        shareToken.redeemPositions(conditionId);
+        uint256 feesAfterCarol = shareToken.resolutionFeesAccumulated();
+        uint256 expectedTotal = bobShares * 25 / 10_000 + carolShares * 25 / 10_000;
+        assertEq(feesAfterCarol, expectedTotal, "fees should accumulate from both");
+    }
+
+    function test_withdrawResolutionFees_happyPath() public {
+        _setupMarket();
+
+        // Set fee and recipient
+        vm.startPrank(admin);
+        shareToken.setResolutionFeeBps(25);
+        shareToken.setResolutionFeeRecipient(protocolAddress);
+        vm.stopPrank();
+
+        _buyShares(bob, Side.Yes, 10_000_000);
+
+        _warpPastDeadline();
+        _resolveMarket(Outcome.Yes);
+
+        vm.prank(bob);
+        shareToken.redeemPositions(conditionId);
+
+        uint256 accumulated = shareToken.resolutionFeesAccumulated();
+        assertTrue(accumulated > 0, "should have fees to withdraw");
+
+        uint256 recipientBalBefore = vault.balances(protocolAddress);
+
+        vm.prank(admin);
+        shareToken.withdrawResolutionFees();
+
+        assertEq(shareToken.resolutionFeesAccumulated(), 0, "accumulated should be zero after withdraw");
+        assertEq(vault.balances(protocolAddress), recipientBalBefore + accumulated, "recipient should receive fees");
+    }
+
+    function test_withdrawResolutionFees_unauthorized() public {
+        vm.prank(bob);
+        vm.expectRevert("not authorized");
+        shareToken.withdrawResolutionFees();
+    }
+
+    function test_setResolutionFeeBps_maxLimit() public {
+        vm.prank(admin);
+        vm.expectRevert("fee too high");
+        shareToken.setResolutionFeeBps(501);
+    }
+
+    function test_setResolutionFeeRecipient_zeroAddress() public {
+        vm.prank(admin);
+        vm.expectRevert("zero address");
+        shareToken.setResolutionFeeRecipient(address(0));
+    }
+
+    function test_vaultInvariant_withResolutionFee() public {
+        _setupMarket();
+
+        vm.startPrank(admin);
+        shareToken.setResolutionFeeBps(100); // 1% for easier math
+        shareToken.setResolutionFeeRecipient(protocolAddress);
+        vm.stopPrank();
+
+        _buyShares(bob, Side.Yes, 20_000_000);
+        _buyShares(carol, Side.No, 15_000_000);
+
+        _warpPastDeadline();
+        _resolveMarket(Outcome.Yes);
+
+        vm.prank(bob);
+        shareToken.redeemPositions(conditionId);
+
+        assertTrue(vault.checkInvariant(), "vault invariant should hold after fee redemption");
     }
 }

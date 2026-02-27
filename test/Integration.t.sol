@@ -72,7 +72,8 @@ contract IntegrationTest is BaseV2Test {
             Side.Yes,
             true, // isBuy
             buyAmount,
-            0 // no slippage protection for test
+            0, // no slippage protection for test
+            10000
         );
 
         // Verify shares received
@@ -100,7 +101,7 @@ contract IntegrationTest is BaseV2Test {
         uint256 buyAmount = 10_000_000; // 10 USDC
         vm.prank(bob);
         uint256 sharesOut = backstopRouter.executeTrade(
-            conditionId, Side.Yes, true, buyAmount, 0
+            conditionId, Side.Yes, true, buyAmount, 0, 10000
         );
         assertTrue(sharesOut > 0, "should get shares from buy");
 
@@ -113,7 +114,7 @@ contract IntegrationTest is BaseV2Test {
 
         vm.prank(bob);
         uint256 usdcOut = backstopRouter.executeTrade(
-            conditionId, Side.Yes, false, sharesOut, 0
+            conditionId, Side.Yes, false, sharesOut, 0, 10000
         );
 
         // Verify USDC received
@@ -186,7 +187,7 @@ contract IntegrationTest is BaseV2Test {
         // Bob buys YES shares
         vm.prank(bob);
         uint256 sharesOut = backstopRouter.executeTrade(
-            conditionId, Side.Yes, true, 10_000_000, 0
+            conditionId, Side.Yes, true, 10_000_000, 0, 10000
         );
         assertTrue(sharesOut > 0);
 
@@ -236,7 +237,7 @@ contract IntegrationTest is BaseV2Test {
         // Bob buys NO shares (becomes a token holder who can dispute)
         vm.prank(bob);
         uint256 sharesOut = backstopRouter.executeTrade(
-            conditionId, Side.No, true, 10_000_000, 0
+            conditionId, Side.No, true, 10_000_000, 0, 10000
         );
         assertTrue(sharesOut > 0);
         assertTrue(shareToken.balanceOf(bob, noId) > 0, "bob should have NO shares");
@@ -269,13 +270,13 @@ contract IntegrationTest is BaseV2Test {
 
         // Bob buys YES, Carol buys NO
         vm.prank(bob);
-        backstopRouter.executeTrade(conditionId, Side.Yes, true, 10_000_000, 0);
+        backstopRouter.executeTrade(conditionId, Side.Yes, true, 10_000_000, 0, 10000);
 
         vm.prank(carol);
-        backstopRouter.executeTrade(conditionId, Side.No, true, 10_000_000, 0);
+        backstopRouter.executeTrade(conditionId, Side.No, true, 10_000_000, 0, 10000);
 
-        // Fast-forward past deadline + ADMIN_RESOLVE_WINDOW (6h)
-        vm.warp(lmsr.deadline() + 6 hours + 1);
+        // Fast-forward past deadline + ADMIN_RESOLVE_WINDOW (24h)
+        vm.warp(lmsr.deadline() + 24 hours + 1);
 
         // Anyone can mark as invalid
         shareToken.markAsInvalid(conditionId);
@@ -421,7 +422,7 @@ contract IntegrationTest is BaseV2Test {
         // Bob buys 3 times
         for (uint256 i = 0; i < 3; i++) {
             vm.prank(bob);
-            backstopRouter.executeTrade(conditionId, Side.Yes, true, 5_000_000, 0);
+            backstopRouter.executeTrade(conditionId, Side.Yes, true, 5_000_000, 0, 10000);
         }
 
         uint256 totalShares = shareToken.balanceOf(bob, yesId);
@@ -433,7 +434,7 @@ contract IntegrationTest is BaseV2Test {
 
         vm.prank(bob);
         uint256 usdcBack = backstopRouter.executeTrade(
-            conditionId, Side.Yes, false, totalShares, 0
+            conditionId, Side.Yes, false, totalShares, 0, 10000
         );
 
         assertTrue(usdcBack > 0, "should receive USDC back");
@@ -488,11 +489,11 @@ contract IntegrationTest is BaseV2Test {
 
         // Bob buys YES
         vm.prank(bob);
-        backstopRouter.executeTrade(conditionId, Side.Yes, true, 20_000_000, 0);
+        backstopRouter.executeTrade(conditionId, Side.Yes, true, 20_000_000, 0, 10000);
 
         // Carol buys NO
         vm.prank(carol);
-        backstopRouter.executeTrade(conditionId, Side.No, true, 15_000_000, 0);
+        backstopRouter.executeTrade(conditionId, Side.No, true, 15_000_000, 0, 10000);
 
         // Check invariant: USDC.balanceOf(vault) >= totalBalances + splitReserve + feePool
         uint256 usdcBalance = usdc.balanceOf(address(vault));

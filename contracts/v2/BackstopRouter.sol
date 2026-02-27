@@ -50,6 +50,7 @@ contract BackstopRouter is EIP712, ReentrancyGuard {
     DelegationRegistry public delegationRegistry;
     address public factory;
     address public admin;
+    bool public paused;
 
     /// @notice conditionId → MarketLMSR clone address
     mapping(bytes32 => address) public backstops;
@@ -93,6 +94,8 @@ contract BackstopRouter is EIP712, ReentrancyGuard {
     error NotTraderOrSigner();
     error NotFactory();
     error NotAdmin();
+    error RouterPaused();
+    error ZeroAddress();
 
     // ============================================================
     // Constructor
@@ -116,6 +119,15 @@ contract BackstopRouter is EIP712, ReentrancyGuard {
     }
 
     // ============================================================
+    // Modifiers
+    // ============================================================
+
+    modifier whenNotPaused() {
+        if (paused) revert RouterPaused();
+        _;
+    }
+
+    // ============================================================
     // Gasless: Execute Signed TradeIntent (CEI-compliant)
     // ============================================================
 
@@ -128,6 +140,7 @@ contract BackstopRouter is EIP712, ReentrancyGuard {
     function executeTradeIntent(TradeIntent calldata intent, bytes calldata sig)
         external
         nonReentrant
+        whenNotPaused
         returns (uint256 result)
     {
         // ── CHECKS ──
@@ -197,16 +210,22 @@ contract BackstopRouter is EIP712, ReentrancyGuard {
 
     /**
      * @notice Direct LMSR trade (msg.sender = trader)
+     * @param maxFeeBps Maximum acceptable fee in basis points (reverts if LMSR fee exceeds this)
      */
     function executeTrade(
         bytes32 conditionId,
         Side side,
         bool isBuy,
         uint256 amount,
-        uint256 minOut
-    ) external nonReentrant returns (uint256 result) {
+        uint256 minOut,
+        uint256 maxFeeBps
+    ) external nonReentrant whenNotPaused returns (uint256 result) {
         address lmsrAddr = backstops[conditionId];
         if (lmsrAddr == address(0)) revert NoBackstop();
+
+        // Validate fee ceiling (H-4: was hardcoded to 10000, now user-specified)
+        uint256 lmsrTotalFee = MarketLMSR(lmsrAddr).totalFeeBpsView();
+        if (lmsrTotalFee > maxFeeBps) revert FeeExceedsMax();
 
         TradeIntent memory intent = TradeIntent({
             trader: msg.sender,
@@ -218,7 +237,7 @@ contract BackstopRouter is EIP712, ReentrancyGuard {
             minOut: minOut,
             deadline: block.timestamp,
             nonce: 0, // not used for direct trades
-            maxFeeBps: 10000 // no fee ceiling for direct trades
+            maxFeeBps: maxFeeBps
         });
 
         if (isBuy) {
@@ -281,7 +300,18 @@ contract BackstopRouter is EIP712, ReentrancyGuard {
 
     function transferAdmin(address newAdmin) external {
         if (msg.sender != admin) revert NotAdmin();
+        if (newAdmin == address(0)) revert ZeroAddress();
         admin = newAdmin;
+    }
+
+    function pause() external {
+        if (msg.sender != admin) revert NotAdmin();
+        paused = true;
+    }
+
+    function unpause() external {
+        if (msg.sender != admin) revert NotAdmin();
+        paused = false;
     }
 
     // ============================================================

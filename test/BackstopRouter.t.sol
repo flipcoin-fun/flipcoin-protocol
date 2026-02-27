@@ -348,7 +348,8 @@ contract BackstopRouterTest is BaseV2Test {
             Side.Yes,
             true,
             buyAmount,
-            0
+            0,
+            10000
         );
 
         assertTrue(sharesOut > 0, "should receive shares");
@@ -370,7 +371,7 @@ contract BackstopRouterTest is BaseV2Test {
         // Bob buys YES shares
         vm.prank(bob);
         uint256 sharesOut = backstopRouter.executeTrade(
-            conditionId, Side.Yes, true, buyAmount, 0
+            conditionId, Side.Yes, true, buyAmount, 0, 10000
         );
         assertTrue(sharesOut > 0, "should receive shares from buy");
 
@@ -383,7 +384,7 @@ contract BackstopRouterTest is BaseV2Test {
 
         vm.prank(bob);
         uint256 usdcOut = backstopRouter.executeTrade(
-            conditionId, Side.Yes, false, sharesOut, 0
+            conditionId, Side.Yes, false, sharesOut, 0, 10000
         );
 
         assertTrue(usdcOut > 0, "should receive USDC from sell");
@@ -573,7 +574,7 @@ contract BackstopRouterTest is BaseV2Test {
 
         vm.prank(bob);
         vm.expectRevert(BackstopRouter.NoBackstop.selector);
-        backstopRouter.executeTrade(fakeConditionId, Side.Yes, true, 5_000_000, 0);
+        backstopRouter.executeTrade(fakeConditionId, Side.Yes, true, 5_000_000, 0, 10000);
     }
 
     // ============================================================
@@ -635,7 +636,7 @@ contract BackstopRouterTest is BaseV2Test {
 
         vm.prank(bob);
         uint256 sharesOut = backstopRouter.executeTrade(
-            conditionId, Side.No, true, 10_000_000, 0
+            conditionId, Side.No, true, 10_000_000, 0, 10000
         );
 
         assertTrue(sharesOut > 0, "should receive NO shares");
@@ -651,7 +652,7 @@ contract BackstopRouterTest is BaseV2Test {
         // First: bob buys YES directly
         vm.prank(bobAddr);
         uint256 sharesOut = backstopRouter.executeTrade(
-            conditionId, Side.Yes, true, 10_000_000, 0
+            conditionId, Side.Yes, true, 10_000_000, 0, 10000
         );
         assertTrue(sharesOut > 0);
 
@@ -772,7 +773,7 @@ contract BackstopRouterTest is BaseV2Test {
 
         // First buy some shares
         vm.prank(alice);
-        backstopRouter.executeTrade(conditionId, Side.Yes, true, 10_000_000, 0);
+        backstopRouter.executeTrade(conditionId, Side.Yes, true, 10_000_000, 0, 10000);
 
         // Quote sell
         (uint256 amountOut, uint256 fee) = backstopRouter.quoteSell(conditionId, Side.Yes, 5_000_000);
@@ -789,7 +790,7 @@ contract BackstopRouterTest is BaseV2Test {
 
         // Execute actual trade
         vm.prank(alice);
-        uint256 actualShares = backstopRouter.executeTrade(conditionId, Side.Yes, true, amountUsdc, 0);
+        uint256 actualShares = backstopRouter.executeTrade(conditionId, Side.Yes, true, amountUsdc, 0, 10000);
 
         // Should match exactly (same state)
         assertEq(quotedShares, actualShares, "quote must match actual trade");
