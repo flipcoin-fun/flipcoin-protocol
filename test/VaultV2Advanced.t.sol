@@ -27,19 +27,19 @@ contract VaultV2AdvancedTest is BaseV2Test {
 
         // Trade on all 3 markets concurrently
         vm.prank(alice);
-        backstopRouter.executeTrade(cond1, Side.Yes, true, 5_000_000, 0);
+        backstopRouter.executeTrade(cond1, Side.Yes, true, 5_000_000, 0, 10000);
         vm.prank(bob);
-        backstopRouter.executeTrade(cond1, Side.No, true, 3_000_000, 0);
+        backstopRouter.executeTrade(cond1, Side.No, true, 3_000_000, 0, 10000);
 
         vm.prank(alice);
-        backstopRouter.executeTrade(cond2, Side.No, true, 8_000_000, 0);
+        backstopRouter.executeTrade(cond2, Side.No, true, 8_000_000, 0, 10000);
         vm.prank(carol);
-        backstopRouter.executeTrade(cond2, Side.Yes, true, 6_000_000, 0);
+        backstopRouter.executeTrade(cond2, Side.Yes, true, 6_000_000, 0, 10000);
 
         vm.prank(bob);
-        backstopRouter.executeTrade(cond3, Side.Yes, true, 4_000_000, 0);
+        backstopRouter.executeTrade(cond3, Side.Yes, true, 4_000_000, 0, 10000);
         vm.prank(carol);
-        backstopRouter.executeTrade(cond3, Side.No, true, 4_000_000, 0);
+        backstopRouter.executeTrade(cond3, Side.No, true, 4_000_000, 0, 10000);
 
         // Vault invariant must hold across all markets
         assertTrue(vault.checkInvariant(), "multi-market solvency invariant must hold");
@@ -55,9 +55,9 @@ contract VaultV2AdvancedTest is BaseV2Test {
 
         // Trade on both
         vm.prank(bob);
-        backstopRouter.executeTrade(cond1, Side.Yes, true, 10_000_000, 0);
+        backstopRouter.executeTrade(cond1, Side.Yes, true, 10_000_000, 0, 10000);
         vm.prank(carol);
-        backstopRouter.executeTrade(cond2, Side.No, true, 10_000_000, 0);
+        backstopRouter.executeTrade(cond2, Side.No, true, 10_000_000, 0, 10000);
 
         // Warp past both market deadlines (m2 has 30d deadline, so warp past that)
         uint64 latestDeadline = MarketLMSR(m2).deadline();

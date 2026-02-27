@@ -42,9 +42,10 @@ abstract contract BaseV2Test is Test {
     address public relayer = makeAddr("relayer");
 
     // ── Config ──
-    uint16 public constant DEFAULT_TOTAL_FEE_BPS = 100;   // 1%
     uint16 public constant DEFAULT_CREATOR_FEE_BPS = 50;   // 0.5%
-    uint16 public constant DEFAULT_PROTOCOL_FEE_BPS = 50;  // 0.5%
+    uint16 public constant DEFAULT_MAKER_FEE_BPS = 0;      // 0% (makers pay only creator fee)
+    uint16 public constant DEFAULT_TAKER_FEE_BPS = 50;     // 0.5% (takers pay creator + protocol)
+    uint16 public constant DEFAULT_TOTAL_FEE_BPS = DEFAULT_CREATOR_FEE_BPS + DEFAULT_MAKER_FEE_BPS + DEFAULT_TAKER_FEE_BPS; // 1.0%
     uint64 public constant MIN_DURATION = 1 hours;
     uint64 public constant MAX_DURATION = 365 days;
 
@@ -75,7 +76,8 @@ abstract contract BaseV2Test is Test {
             address(vault),
             address(delegationRegistry),
             protocolAddress,
-            DEFAULT_PROTOCOL_FEE_BPS
+            DEFAULT_MAKER_FEE_BPS,
+            DEFAULT_TAKER_FEE_BPS
         );
 
         // 6. Deploy BackstopRouter
@@ -99,9 +101,9 @@ abstract contract BaseV2Test is Test {
             address(exchange),
             address(backstopRouter),
             address(delegationRegistry),
-            DEFAULT_TOTAL_FEE_BPS,
             DEFAULT_CREATOR_FEE_BPS,
-            DEFAULT_PROTOCOL_FEE_BPS,
+            DEFAULT_MAKER_FEE_BPS,
+            DEFAULT_TAKER_FEE_BPS,
             MIN_DURATION,
             MAX_DURATION
         );

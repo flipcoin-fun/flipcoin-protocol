@@ -81,7 +81,7 @@ contract BackstopRouterAdvancedTest is BaseV2Test {
         // Set minOut higher than what we'd receive → should revert
         vm.prank(bobAddr);
         vm.expectRevert(MarketLMSR.SlippageExceeded.selector);
-        backstopRouter.executeTrade(conditionId, Side.Yes, true, buyAmount, expectedShares + 1);
+        backstopRouter.executeTrade(conditionId, Side.Yes, true, buyAmount, expectedShares + 1, 10000);
     }
 
     function test_minOut_directBuy_exactBoundary_passes() public {
@@ -92,7 +92,7 @@ contract BackstopRouterAdvancedTest is BaseV2Test {
 
         // minOut == actual → should succeed
         vm.prank(bobAddr);
-        uint256 sharesOut = backstopRouter.executeTrade(conditionId, Side.Yes, true, buyAmount, expectedShares);
+        uint256 sharesOut = backstopRouter.executeTrade(conditionId, Side.Yes, true, buyAmount, expectedShares, 10000);
         assertEq(sharesOut, expectedShares, "exact minOut should pass");
     }
 
@@ -105,7 +105,7 @@ contract BackstopRouterAdvancedTest is BaseV2Test {
 
         // Buy first
         vm.prank(bobAddr);
-        uint256 sharesOut = backstopRouter.executeTrade(conditionId, Side.Yes, true, 10_000_000, 0);
+        uint256 sharesOut = backstopRouter.executeTrade(conditionId, Side.Yes, true, 10_000_000, 0, 10000);
 
         vm.prank(bobAddr);
         shareToken.setApprovalForAll(address(backstopRouter), true);
@@ -116,14 +116,14 @@ contract BackstopRouterAdvancedTest is BaseV2Test {
         // minOut too high → revert
         vm.prank(bobAddr);
         vm.expectRevert(MarketLMSR.SlippageExceeded.selector);
-        backstopRouter.executeTrade(conditionId, Side.Yes, false, sharesOut, expectedUsdc + 1);
+        backstopRouter.executeTrade(conditionId, Side.Yes, false, sharesOut, expectedUsdc + 1, 10000);
     }
 
     function test_minOut_directSell_exactBoundary_passes() public {
         _setupMarket();
 
         vm.prank(bobAddr);
-        uint256 sharesOut = backstopRouter.executeTrade(conditionId, Side.Yes, true, 10_000_000, 0);
+        uint256 sharesOut = backstopRouter.executeTrade(conditionId, Side.Yes, true, 10_000_000, 0, 10000);
 
         vm.prank(bobAddr);
         shareToken.setApprovalForAll(address(backstopRouter), true);
@@ -131,7 +131,7 @@ contract BackstopRouterAdvancedTest is BaseV2Test {
         (uint256 expectedUsdc,) = backstopRouter.quoteSell(conditionId, Side.Yes, sharesOut);
 
         vm.prank(bobAddr);
-        uint256 usdcOut = backstopRouter.executeTrade(conditionId, Side.Yes, false, sharesOut, expectedUsdc);
+        uint256 usdcOut = backstopRouter.executeTrade(conditionId, Side.Yes, false, sharesOut, expectedUsdc, 10000);
         assertEq(usdcOut, expectedUsdc, "exact minOut sell should pass");
     }
 
@@ -173,7 +173,7 @@ contract BackstopRouterAdvancedTest is BaseV2Test {
 
         // Buy first
         vm.prank(bobAddr);
-        uint256 sharesOut = backstopRouter.executeTrade(conditionId, Side.Yes, true, 10_000_000, 0);
+        uint256 sharesOut = backstopRouter.executeTrade(conditionId, Side.Yes, true, 10_000_000, 0, 10000);
 
         vm.prank(bobAddr);
         shareToken.setApprovalForAll(address(backstopRouter), true);
@@ -289,13 +289,13 @@ contract BackstopRouterAdvancedTest is BaseV2Test {
         // 5 sequential buy trades
         for (uint256 i = 0; i < 5; i++) {
             vm.prank(bobAddr);
-            backstopRouter.executeTrade(conditionId, Side.Yes, true, 2_000_000, 0);
+            backstopRouter.executeTrade(conditionId, Side.Yes, true, 2_000_000, 0, 10000);
         }
 
         // 5 sequential buy NO
         for (uint256 i = 0; i < 5; i++) {
             vm.prank(bobAddr);
-            backstopRouter.executeTrade(conditionId, Side.No, true, 2_000_000, 0);
+            backstopRouter.executeTrade(conditionId, Side.No, true, 2_000_000, 0, 10000);
         }
 
         // Sell some YES shares
@@ -306,7 +306,7 @@ contract BackstopRouterAdvancedTest is BaseV2Test {
         uint256 yesBal = shareToken.balanceOf(bobAddr, yesId);
         if (yesBal > 1_000_000) {
             vm.prank(bobAddr);
-            backstopRouter.executeTrade(conditionId, Side.Yes, false, 1_000_000, 0);
+            backstopRouter.executeTrade(conditionId, Side.Yes, false, 1_000_000, 0, 10000);
         }
 
         assertTrue(vault.checkInvariant(), "vault invariant must hold after multi-trade sequence");
@@ -332,6 +332,6 @@ contract BackstopRouterAdvancedTest is BaseV2Test {
         // Zero amount buy — MarketLMSR should handle this
         vm.prank(bobAddr);
         vm.expectRevert(); // zero trade should revert somewhere in the stack
-        backstopRouter.executeTrade(conditionId, Side.Yes, true, 0, 0);
+        backstopRouter.executeTrade(conditionId, Side.Yes, true, 0, 0, 10000);
     }
 }

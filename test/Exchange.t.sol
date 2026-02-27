@@ -194,7 +194,7 @@ contract ExchangeTest is BaseV2Test {
         returns (uint256 sharesOut)
     {
         vm.prank(buyer);
-        sharesOut = backstopRouter.executeTrade(conditionId, side, true, usdcAmount, 0);
+        sharesOut = backstopRouter.executeTrade(conditionId, side, true, usdcAmount, 0, 10000);
     }
 
     /// @dev Approve exchange to transfer shares on behalf of `owner`
@@ -542,18 +542,20 @@ contract ExchangeTest is BaseV2Test {
             + (creatorFeesAfter - creatorFeesBefore);
         assertTrue(totalFeesCollected > 0, "fees should be collected on complementary match");
 
-        // Verify protocol/creator fee ratio (50/50 for default config)
+        // With makerFeeBps=0, only taker pays protocol fee.
+        // Creator gets: taker's creator share + all of maker's fee (which is 100% creator).
         uint256 protocolPortion = protocolFeesAfter - protocolFeesBefore;
         uint256 creatorPortion = creatorFeesAfter - creatorFeesBefore;
-        assertEq(protocolPortion, creatorPortion, "protocol and creator fees should be equal");
+        assertTrue(protocolPortion > 0, "protocol fees should be positive");
+        assertTrue(creatorPortion > protocolPortion, "creator should receive more than protocol with makerFeeBps=0");
     }
 
     function test_fees_protocolFeeView() public view {
         uint256 totalFee = exchange.getTotalFeeBps(conditionId);
         assertEq(
             totalFee,
-            DEFAULT_PROTOCOL_FEE_BPS + DEFAULT_CREATOR_FEE_BPS,
-            "total fee should equal protocol + creator"
+            DEFAULT_MAKER_FEE_BPS + DEFAULT_TAKER_FEE_BPS + DEFAULT_CREATOR_FEE_BPS,
+            "total fee should equal maker + taker + creator"
         );
     }
 
@@ -936,7 +938,7 @@ contract ExchangeTest is BaseV2Test {
     function test_feeExceedsMax_takerOrder() public {
         uint256 fillAmount = 1_000_000;
 
-        // Bob's order has maxFeeBps = 10 (0.1%), but total fee is 100 (1%)
+        // Bob (taker) has maxFeeBps = 10, but taker fee = takerFeeBps + creatorFeeBps = 100
         Order memory bobOrder = _makeBuyOrder(
             bobAddr, bobAddr, yesTokenId, 500_000, fillAmount, Side.Yes
         );
@@ -958,7 +960,7 @@ contract ExchangeTest is BaseV2Test {
             bobAddr, bobAddr, yesTokenId, 500_000, fillAmount, Side.Yes
         );
 
-        // Carol's order has maxFeeBps too low
+        // Carol (maker) has maxFeeBps too low — maker fee = makerFeeBps + creatorFeeBps = 50
         Order memory carolOrder = _makeBuyOrder(
             carolAddr, carolAddr, noTokenId, 500_000, fillAmount, Side.No
         );
@@ -972,7 +974,8 @@ contract ExchangeTest is BaseV2Test {
     function test_feeExceedsMax_exactlyEqual() public {
         uint256 fillAmount = 1_000_000;
 
-        // Total fee is protocolFeeBps + creatorFeeBps = 50 + 50 = 100
+        // Taker fee = takerFeeBps + creatorFeeBps = 50 + 50 = 100
+        // Maker fee = makerFeeBps + creatorFeeBps = 0 + 50 = 50
         Order memory bobOrder = _makeBuyOrder(
             bobAddr, bobAddr, yesTokenId, 500_000, fillAmount, Side.Yes
         );
@@ -1267,22 +1270,23 @@ contract ExchangeTest is BaseV2Test {
         exchange.setOperator(bobAddr);
     }
 
-    function test_setProtocolFeeBps_onlyAdmin() public {
+    function test_setFees_onlyAdmin() public {
         vm.prank(admin);
-        exchange.setProtocolFeeBps(100); // 1%
-        assertEq(exchange.protocolFeeBps(), 100, "fee should be updated");
+        exchange.setFees(10, 90); // maker=0.1%, taker=0.9%
+        assertEq(exchange.makerFeeBps(), 10, "maker fee should be updated");
+        assertEq(exchange.takerFeeBps(), 90, "taker fee should be updated");
 
         // Non-admin cannot set fee
         vm.prank(bobAddr);
         vm.expectRevert(Exchange.NotAdmin.selector);
-        exchange.setProtocolFeeBps(200);
+        exchange.setFees(20, 80);
     }
 
-    function test_setProtocolFeeBps_maxLimit() public {
-        // Cannot exceed 5% (500 bps)
+    function test_setFees_maxLimit() public {
+        // Combined cannot exceed 5% (500 bps)
         vm.prank(admin);
         vm.expectRevert("fee too high");
-        exchange.setProtocolFeeBps(501);
+        exchange.setFees(250, 251);
     }
 
     function test_transferAdmin() public {

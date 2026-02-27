@@ -84,9 +84,9 @@ contract FactoryV2 is EIP712 {
     struct Config {
         address admin;
         address protocolAddress;
-        uint16 defaultTotalFeeBps;
         uint16 defaultCreatorFeeBps;
-        uint16 defaultProtocolFeeBps;
+        uint16 defaultMakerFeeBps;
+        uint16 defaultTakerFeeBps;
         uint64 minMarketDuration;
         uint64 maxMarketDuration;
     }
@@ -185,9 +185,9 @@ contract FactoryV2 is EIP712 {
         address _exchange,
         address _backstopRouter,
         address _delegationRegistry,
-        uint16 _defaultTotalFeeBps,
         uint16 _defaultCreatorFeeBps,
-        uint16 _defaultProtocolFeeBps,
+        uint16 _defaultMakerFeeBps,
+        uint16 _defaultTakerFeeBps,
         uint64 _minMarketDuration,
         uint64 _maxMarketDuration
     ) EIP712("FlipCoin Factory", "1") {
@@ -208,9 +208,9 @@ contract FactoryV2 is EIP712 {
         config = Config({
             admin: _admin,
             protocolAddress: _protocolAddress,
-            defaultTotalFeeBps: _defaultTotalFeeBps,
             defaultCreatorFeeBps: _defaultCreatorFeeBps,
-            defaultProtocolFeeBps: _defaultProtocolFeeBps,
+            defaultMakerFeeBps: _defaultMakerFeeBps,
+            defaultTakerFeeBps: _defaultTakerFeeBps,
             minMarketDuration: _minMarketDuration,
             maxMarketDuration: _maxMarketDuration
         });
@@ -444,6 +444,9 @@ contract FactoryV2 is EIP712 {
         _validateParams(params);
         _validateSeedAndPrice(seedUsdc, initialPriceYesBps);
 
+        // Explicit deadline check: must be in the future (prevents underflow in duration calc)
+        require(params.deadline > uint64(block.timestamp), "deadline in the past");
+
         uint64 duration = params.deadline - uint64(block.timestamp);
         if (duration < config.minMarketDuration) revert DurationTooShort();
         if (duration > config.maxMarketDuration) revert DurationTooLong();
@@ -491,9 +494,9 @@ contract FactoryV2 is EIP712 {
             conditionId: conditionId,
             yesTokenId: yesId,
             noTokenId: noId,
-            totalFeeBps: config.defaultTotalFeeBps,
+            totalFeeBps: config.defaultCreatorFeeBps + config.defaultMakerFeeBps + config.defaultTakerFeeBps,
             creatorFeeBps: config.defaultCreatorFeeBps,
-            protocolFeeBps: config.defaultProtocolFeeBps,
+            protocolFeeBps: config.defaultMakerFeeBps + config.defaultTakerFeeBps,
             deadline: params.deadline,
             question: params.question,
             description: params.description,

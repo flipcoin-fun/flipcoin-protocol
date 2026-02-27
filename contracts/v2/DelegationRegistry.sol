@@ -182,7 +182,16 @@ contract DelegationRegistry {
      * @param owner The delegating address
      * @param signer The delegated signer
      * @param usdcAmount Amount of USDC spent (6 decimals)
-     * @dev Only callable by authorized contracts (Exchange, BackstopRouter, Factory)
+     * @dev Only callable by authorized contracts (Exchange, BackstopRouter, Factory).
+     *
+     * DAILY LIMIT WINDOW: Uses a rolling 24-hour window anchored to `dayStart`.
+     * When the first spend occurs after `dayStart + 24h`, the window resets:
+     * `dayStart = block.timestamp` and `spentToday = 0`. This means the window
+     * is NOT a strict calendar day — it slides forward from the last reset.
+     * Example: if dayStart=Mon 10:00 and next spend is Wed 15:00, the window
+     * resets to Wed 15:00, allowing full daily limit from that point.
+     * This is simpler than a true sliding window but provides adequate protection
+     * for session key spending limits.
      */
     function recordSpend(
         address owner,

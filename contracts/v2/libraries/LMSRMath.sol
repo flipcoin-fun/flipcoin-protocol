@@ -117,6 +117,12 @@ library LMSRMath {
         }
 
         sharesOut = low;
+
+        // Post-check: verify binary search converged to a valid result.
+        // If high == upper bound, the search may not have found a valid solution.
+        if (sharesOut == 0 && costUsdc > 0) {
+            revert("binary search: no convergence");
+        }
     }
 
     /**
