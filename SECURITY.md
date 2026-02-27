@@ -22,4 +22,4 @@ We are working on a formal bug bounty program. In the meantime, responsible disc
 
 ## Audit Status
 
-The v2 contracts are pending formal audit. Use at your own risk on testnet.
+The v2 contracts have been audited (automated review by Claude Opus 4.6, February 2026). 18 findings identified and fixed. See `docs/SECURITY_AUDIT_CONTRACTS.md` for the full report.
