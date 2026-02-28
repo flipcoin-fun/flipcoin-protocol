@@ -322,7 +322,234 @@ contract AuditFixesTest is BaseV2Test {
     }
 
     // ============================================================
-    // Internal Helpers
+    // R2-1: Exchange._settleComplementary — Seller price protection
+    // ============================================================
+
+    function test_R2_1_complementary_priceBelowSellerAsk_reverts() public {
+        // Bob sells YES shares at 7000 bps ($0.70 minimum)
+        // Carol buys YES shares at 5000 bps ($0.50)
+        // Should revert: buyer price < seller ask
+
+        // Bob gets YES shares via LMSR
+        _buySharesViaBackstop(bobAddr, Side.Yes, 10_000_000);
+        _approveExchange(bobAddr);
+
+        // Bob sell order: 1_000_000 shares, wants 700_000 USDC (= 7000 bps)
+        Order memory sellOrder = _makeSellOrder(bobAddr, bobAddr, yesTokenId, 1_000_000, 700_000, Side.Yes);
+        // Carol buy order: 500_000 USDC for 1_000_000 shares (= 5000 bps)
+        Order memory buyOrder = _makeBuyOrder(carolAddr, carolAddr, yesTokenId, 500_000, 1_000_000, Side.Yes);
+
+        bytes memory takerSig = _signOrder(buyOrder, CAROL_PK);
+        bytes memory makerSig = _signOrder(sellOrder, BOB_PK);
+
+        vm.prank(operator);
+        vm.expectRevert(Exchange.PriceBelowSellerMinimum.selector);
+        exchange.matchOrders(buyOrder, sellOrder, 1_000_000, takerSig, makerSig, MatchType.COMPLEMENTARY);
+    }
+
+    function test_R2_1_complementary_priceAtSellerAsk_succeeds() public {
+        // Bob sells YES shares at 5000 bps ($0.50)
+        // Carol buys YES shares at 5000 bps ($0.50)
+        // Should succeed: buyer price == seller ask
+
+        _buySharesViaBackstop(bobAddr, Side.Yes, 10_000_000);
+        _approveExchange(bobAddr);
+
+        // Bob sell order: 1_000_000 shares at 5000 bps
+        Order memory sellOrder = _makeSellOrder(bobAddr, bobAddr, yesTokenId, 1_000_000, 500_000, Side.Yes);
+        // Carol buy order: 1_000_000 shares at 5000 bps
+        Order memory buyOrder = _makeBuyOrder(carolAddr, carolAddr, yesTokenId, 500_000, 1_000_000, Side.Yes);
+
+        bytes memory takerSig = _signOrder(buyOrder, CAROL_PK);
+        bytes memory makerSig = _signOrder(sellOrder, BOB_PK);
+
+        uint256 carolBalBefore = vault.balances(carolAddr);
+        uint256 bobBalBefore = vault.balances(bobAddr);
+
+        vm.prank(operator);
+        exchange.matchOrders(buyOrder, sellOrder, 1_000_000, takerSig, makerSig, MatchType.COMPLEMENTARY);
+
+        // Carol paid USDC, Bob received USDC
+        assertTrue(vault.balances(carolAddr) < carolBalBefore, "Carol should have paid");
+        assertTrue(vault.balances(bobAddr) > bobBalBefore, "Bob should have received");
+    }
+
+    function test_R2_1_complementary_priceAboveSellerAsk_succeeds() public {
+        // Bob sells YES shares at 4000 bps ($0.40)
+        // Carol buys YES shares at 5000 bps ($0.50)
+        // Should succeed: buyer price > seller ask (price improvement for seller)
+
+        _buySharesViaBackstop(bobAddr, Side.Yes, 10_000_000);
+        _approveExchange(bobAddr);
+
+        // Bob sell order: 1_000_000 shares at 4000 bps
+        Order memory sellOrder = _makeSellOrder(bobAddr, bobAddr, yesTokenId, 1_000_000, 400_000, Side.Yes);
+        // Carol buy order: 1_000_000 shares at 5000 bps
+        Order memory buyOrder = _makeBuyOrder(carolAddr, carolAddr, yesTokenId, 500_000, 1_000_000, Side.Yes);
+
+        bytes memory takerSig = _signOrder(buyOrder, CAROL_PK);
+        bytes memory makerSig = _signOrder(sellOrder, BOB_PK);
+
+        vm.prank(operator);
+        exchange.matchOrders(buyOrder, sellOrder, 1_000_000, takerSig, makerSig, MatchType.COMPLEMENTARY);
+
+        // Bob received shares worth of USDC
+        assertTrue(shareToken.balanceOf(carolAddr, yesTokenId) > 0, "Carol should hold YES shares");
+    }
+
+    // ============================================================
+    // R2-2: Exchange._settleMerge — Surplus USDC to protocol fees
+    // ============================================================
+
+    function test_R2_2_merge_surplusToProtocolFees() public {
+        // MERGE with price1 + price2 < BPS → surplus should go to protocolFeesAccumulated
+        // Seller1: sells YES at 3000 bps ($0.30)
+        // Seller2: sells NO at 5000 bps ($0.50)
+        // Total = 8000 bps < 10000 → surplus = fillAmount - usdc1 - usdc2
+
+        // Get shares for both sellers
+        _buySharesViaBackstop(bobAddr, Side.Yes, 10_000_000);
+        _buySharesViaBackstop(carolAddr, Side.No, 10_000_000);
+        _approveExchange(bobAddr);
+        _approveExchange(carolAddr);
+
+        uint256 fillAmount = 1_000_000; // 1 share pair
+
+        // Bob sells YES at 3000 bps: 1_000_000 shares, wants 300_000 USDC
+        Order memory sellYes = _makeSellOrder(bobAddr, bobAddr, yesTokenId, fillAmount, 300_000, Side.Yes);
+        // Carol sells NO at 5000 bps: 1_000_000 shares, wants 500_000 USDC
+        Order memory sellNo = _makeSellOrder(carolAddr, carolAddr, noTokenId, fillAmount, 500_000, Side.No);
+
+        bytes memory takerSig = _signOrder(sellYes, BOB_PK);
+        bytes memory makerSig = _signOrder(sellNo, CAROL_PK);
+
+        uint256 protocolFeesBefore = exchange.protocolFeesAccumulated();
+
+        vm.prank(operator);
+        exchange.matchOrders(sellYes, sellNo, fillAmount, takerSig, makerSig, MatchType.MERGE);
+
+        // usdc1 = 1_000_000 * 3000 / 10000 = 300_000
+        // usdc2 = 1_000_000 * 5000 / 10000 = 500_000
+        // totalPaid = 800_000, surplus = 1_000_000 - 800_000 = 200_000
+        uint256 protocolFeesAfter = exchange.protocolFeesAccumulated();
+        uint256 surplusCollected = protocolFeesAfter - protocolFeesBefore;
+
+        // Surplus should include the 200_000 USDC difference (plus regular fees go elsewhere)
+        assertTrue(surplusCollected >= 200_000, "surplus should be routed to protocol fees");
+    }
+
+    function test_R2_2_merge_noPriceSumEqual() public {
+        // MERGE with price1 + price2 == BPS → no surplus
+        // Seller1: sells YES at 5000 bps ($0.50)
+        // Seller2: sells NO at 5000 bps ($0.50)
+        // Total = 10000 bps = BPS → surplus = 0
+
+        _buySharesViaBackstop(bobAddr, Side.Yes, 10_000_000);
+        _buySharesViaBackstop(carolAddr, Side.No, 10_000_000);
+        _approveExchange(bobAddr);
+        _approveExchange(carolAddr);
+
+        uint256 fillAmount = 1_000_000;
+
+        // Bob sells YES at 5000 bps
+        Order memory sellYes = _makeSellOrder(bobAddr, bobAddr, yesTokenId, fillAmount, 500_000, Side.Yes);
+        // Carol sells NO at 5000 bps
+        Order memory sellNo = _makeSellOrder(carolAddr, carolAddr, noTokenId, fillAmount, 500_000, Side.No);
+
+        bytes memory takerSig = _signOrder(sellYes, BOB_PK);
+        bytes memory makerSig = _signOrder(sellNo, CAROL_PK);
+
+        uint256 protocolFeesBefore = exchange.protocolFeesAccumulated();
+
+        vm.prank(operator);
+        exchange.matchOrders(sellYes, sellNo, fillAmount, takerSig, makerSig, MatchType.MERGE);
+
+        // usdc1 + usdc2 = 500_000 + 500_000 = 1_000_000 == fillAmount → no surplus
+        // protocolFeesAccumulated should only increase by regular fee portion (not surplus)
+        uint256 protocolFeesAfter = exchange.protocolFeesAccumulated();
+        uint256 feeDelta = protocolFeesAfter - protocolFeesBefore;
+
+        // With fillAmount=1_000_000 and price=5000, fee = feeBps * min(5000, 5000) * 1_000_000 / BPS / BPS
+        // The fee is from normal fee accumulation, no surplus component
+        // We just verify no extra surplus was added (feeDelta should be small, from normal fees only)
+        assertTrue(feeDelta < 200_000, "no large surplus should be routed when prices sum to BPS");
+    }
+
+    // ============================================================
+    // Internal Helpers — EIP-712 Signing (for Exchange order tests)
+    // ============================================================
+
+    bytes32 internal DOMAIN_SEPARATOR;
+    bytes32 internal ORDER_TYPEHASH_CACHED;
+    bool internal _eip712Initialized;
+
+    function _ensureEip712() internal {
+        if (_eip712Initialized) return;
+        ORDER_TYPEHASH_CACHED = exchange.ORDER_TYPEHASH();
+        DOMAIN_SEPARATOR = keccak256(
+            abi.encode(
+                keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
+                keccak256("FlipCoinExchange"),
+                keccak256("1"),
+                block.chainid,
+                address(exchange)
+            )
+        );
+        _eip712Initialized = true;
+    }
+
+    function _makeBuyOrder(
+        address maker, address signer, uint256 tokenId,
+        uint256 usdcAmount, uint256 sharesWanted, Side side
+    ) internal pure returns (Order memory) {
+        return Order({
+            salt: uint256(keccak256(abi.encode(maker, tokenId, usdcAmount, sharesWanted, uint256(0)))),
+            maker: maker, signer: signer, taker: address(0),
+            tokenId: tokenId, makerAmount: usdcAmount, takerAmount: sharesWanted,
+            expiration: 0, nonce: 0, maxFeeBps: 10_000,
+            side: side, sigType: SignatureType.EOA
+        });
+    }
+
+    function _makeSellOrder(
+        address maker, address signer, uint256 tokenId,
+        uint256 sharesOffered, uint256 usdcWanted, Side side
+    ) internal pure returns (Order memory) {
+        return Order({
+            salt: uint256(keccak256(abi.encode(maker, tokenId, sharesOffered, usdcWanted, uint256(0)))),
+            maker: maker, signer: signer, taker: address(0),
+            tokenId: tokenId, makerAmount: sharesOffered, takerAmount: usdcWanted,
+            expiration: 0, nonce: 0, maxFeeBps: 10_000,
+            side: side, sigType: SignatureType.EOA
+        });
+    }
+
+    function _signOrder(Order memory order, uint256 pk) internal returns (bytes memory) {
+        _ensureEip712();
+        bytes32 structHash = keccak256(abi.encode(
+            ORDER_TYPEHASH_CACHED,
+            order.salt, order.maker, order.signer, order.taker,
+            order.tokenId, order.makerAmount, order.takerAmount,
+            order.expiration, order.nonce, order.maxFeeBps,
+            uint8(order.side), uint8(order.sigType)
+        ));
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", DOMAIN_SEPARATOR, structHash));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(pk, digest);
+        return abi.encodePacked(r, s, v);
+    }
+
+    function _buySharesViaBackstop(address buyer, Side side, uint256 usdcAmount) internal returns (uint256) {
+        vm.prank(buyer);
+        return backstopRouter.executeTrade(conditionId, side, true, usdcAmount, 0, 10000);
+    }
+
+    function _approveExchange(address owner_) internal {
+        vm.prank(owner_);
+        shareToken.setApprovalForAll(address(exchange), true);
+    }
+
+    // ============================================================
+    // Internal Helpers — Clone Deployment
     // ============================================================
 
     function _deployClone(address impl) internal returns (address clone) {

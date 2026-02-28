@@ -210,11 +210,19 @@ All fixes implemented in PR #51 with 21 regression tests in `AuditFixes.t.sol`.
 
 | Test File | Tests | Coverage |
 |-----------|-------|----------|
-| `AuditFixes.t.sol` (new) | 21 | All 18 findings |
+| `AuditFixes.t.sol` (new) | 26 | All 18 findings + 5 Review #2 fixes |
 | `Exchange.t.sol` | 52 | CLOB settlement |
 | `ShareToken.t.sol` | 40 | Resolution lifecycle |
 | `BackstopRouter.t.sol` | 31 | Trades + fees |
 | `MarketLMSRMath.t.sol` | 34 | LMSR math |
 | `FuzzInvariants.t.sol` | 7 | Fuzz (256 runs) |
-| + 6 more suites | 185 | Integration, edge cases |
-| **Total** | **370** | **All pass ✅** |
+| + 6 more suites | 265 | Integration, edge cases |
+| **Total** | **455** | **All pass ✅** |
+
+---
+
+## Security Review #2
+
+A follow-up independent review was conducted on 2026-02-28. See [`docs/SECURITY_REVIEW_2_CONTRACTS.md`](SECURITY_REVIEW_2_CONTRACTS.md) for the full report.
+
+**Summary:** 2 Medium findings (R2-1: seller price protection in COMPLEMENTARY, R2-2: MERGE surplus stranding) — both fixed with 5 regression tests. 3 Informational notes. All 22 areas examined found secure.
