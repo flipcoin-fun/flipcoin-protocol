@@ -140,6 +140,7 @@ contract Exchange is EIP712, ReentrancyGuard {
     error UndercollateralizedMint();
     error InvalidPrice();
     error CreatorFeeTooHigh();
+    error PriceBelowSellerMinimum();
 
     // ============================================================
     // Modifiers
@@ -490,6 +491,9 @@ contract Exchange is EIP712, ReentrancyGuard {
         uint256 priceBps = _getPriceBuy(buyer);
         // [H-2] Validate price is within sane bounds (share price < $1)
         if (priceBps == 0 || priceBps >= BPS) revert InvalidPrice();
+        // [R2-1] Validate seller's minimum price is satisfied
+        uint256 sellerMinPriceBps = _getPriceSell(seller);
+        if (priceBps < sellerMinPriceBps) revert PriceBelowSellerMinimum();
         uint256 usdcAmount = fillAmount * priceBps / BPS;
         uint256 takerFee = _calculateFee(takerTotalFeeBps_, priceBps, fillAmount);
         uint256 makerFee = _calculateFee(makerTotalFeeBps_, priceBps, fillAmount);
@@ -577,6 +581,14 @@ contract Exchange is EIP712, ReentrancyGuard {
         // Collect fees
         vault.accumulateFee(address(this), fee1 + fee2);
         _recordFeesPerSide(fee1, fee2, takerTotalFeeBps_, makerTotalFeeBps_, conditionId);
+
+        // [R2-2] Route MERGE surplus to protocol fees (prevents USDC stranding)
+        uint256 totalPaid = usdc1 + usdc2;
+        if (fillAmount > totalPaid) {
+            uint256 surplus = fillAmount - totalPaid;
+            vault.accumulateFee(address(this), surplus);
+            protocolFeesAccumulated += surplus;
+        }
 
         _emitFills(seller1, seller2, fillAmount, usdc1, fee1, usdc2, fee2);
     }
