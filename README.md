@@ -93,7 +93,7 @@ npm install @flipcoin/sdk
 # Build contracts
 forge build
 
-# Run tests (336 tests)
+# Run tests (370 tests)
 forge test
 
 # SDK

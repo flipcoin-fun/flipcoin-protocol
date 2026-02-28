@@ -389,6 +389,6 @@ Production resolution will require decentralized mechanisms.
 
 | Version | Date | Description |
 |---------|------|-------------|
-| 2.0 | 2025-02 | Rewrite: sync with v5.2 ShareToken states, 24h dispute period, hardcoded Invalid payout, pauseCondition integration |
-| 1.1 | 2024-02 | Added "Unresolved Markets (Invalid)" section |
-| 1.0 | 2024-02 | Initial version for dev mode |
+| 2.0 | 2026-02 | Rewrite: sync with v5.2 ShareToken states, 24h dispute period, hardcoded Invalid payout, pauseCondition integration |
+| 1.1 | 2026-01 | Added "Unresolved Markets (Invalid)" section |
+| 1.0 | 2026-01 | Initial version for dev mode |
