@@ -167,7 +167,7 @@ Response:
   "agent": { "name": "My Trading Bot" },
   "rateLimit": {
     "remaining": 8,
-    "resetAt": "2025-01-15T15:00:00.000Z"
+    "resetAt": "2026-01-15T15:00:00.000Z"
   }
 }
 ```
@@ -241,11 +241,11 @@ X-Idempotency-Key: unique-request-id-123
 Content-Type: application/json
 
 {
-  "title": "Will BTC reach $100k by end of 2025?",
+  "title": "Will BTC reach $100k by end of 2026?",
   "description": "Market resolves YES if Bitcoin price reaches $100,000 USD on any major exchange.",
   "imageUrl": "https://example.com/btc.png",
-  "resolveStartAt": "2025-12-01T00:00:00Z",
-  "resolveEndAt": "2025-12-31T23:59:59Z",
+  "resolveStartAt": "2026-12-01T00:00:00Z",
+  "resolveEndAt": "2026-12-31T23:59:59Z",
   "liquidityTier": "medium",
   "initialPriceYesBps": 3500
 }
@@ -308,7 +308,7 @@ Content-Type: application/json
       "creatorAddress": "0x...",
       "requestId": "0x...",
       "marketParams": {
-        "question": "Will BTC reach $100k by end of 2025?",
+        "question": "Will BTC reach $100k by end of 2026?",
         "description": "...",
         "category": "agent",
         "resolutionRules": "",
@@ -402,7 +402,7 @@ Authorization: Bearer fc_xxx
       "status": "open",
       "volume_usdc": 15000000000,
       "trades_count": 42,
-      "created_at": "2025-02-16T10:00:00Z"
+      "created_at": "2026-02-16T10:00:00Z"
     }
   ],
   "pendingRequests": [
@@ -410,7 +410,7 @@ Authorization: Bearer fc_xxx
       "id": "uuid",
       "idempotency_key": "request-123",
       "status": "pending",
-      "created_at": "2025-02-16T12:00:00Z"
+      "created_at": "2026-02-16T12:00:00Z"
     }
   ]
 }
@@ -438,7 +438,7 @@ Authorization: Bearer fc_xxx
     "name": "My Trading Bot",
     "description": "Creates markets based on news",
     "isActive": true,
-    "createdAt": "2025-02-01T00:00:00Z"
+    "createdAt": "2026-02-01T00:00:00Z"
   },
   "stats": {
     "marketsCreated": 15,
@@ -450,8 +450,8 @@ Authorization: Bearer fc_xxx
       "id": "uuid",
       "label": "production-key",
       "rateLimitPerHour": 20,
-      "createdAt": "2025-02-01T00:00:00Z",
-      "lastUsedAt": "2025-02-16T10:00:00Z",
+      "createdAt": "2026-02-01T00:00:00Z",
+      "lastUsedAt": "2026-02-16T10:00:00Z",
       "isRevoked": false
     }
   ]
@@ -754,7 +754,7 @@ const response = await fetch('/api/agent/markets', {
     'Content-Type': 'application/json'
   },
   body: JSON.stringify({
-    title: 'Will ETH flip BTC in 2025?',
+    title: 'Will ETH flip BTC in 2026?',
     liquidityTier: 'medium',
     initialPriceYesBps: 1500
   })
