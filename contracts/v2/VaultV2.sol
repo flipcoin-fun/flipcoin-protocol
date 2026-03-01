@@ -44,6 +44,9 @@ contract VaultV2 is ReentrancyGuard {
     address public admin;
     bool public paused;
 
+    /// @notice Platform treasury address — authorized to call depositFor()
+    address public treasury;
+
     /// @notice Internal ledger balances
     mapping(address => uint256) public balances;
 
@@ -80,12 +83,14 @@ contract VaultV2 is ReentrancyGuard {
     event Paused(address indexed admin);
     event Unpaused(address indexed admin);
     event AdminTransferred(address indexed oldAdmin, address indexed newAdmin);
+    event TreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
 
     // ============================================================
     // Errors
     // ============================================================
 
     error NotAdmin();
+    error NotTreasury();
     error VaultPaused();
     error InsufficientBalance();
     error InsufficientSplitReserve();
@@ -128,6 +133,11 @@ contract VaultV2 is ReentrancyGuard {
         _;
     }
 
+    modifier onlyTreasury() {
+        if (msg.sender != treasury) revert NotTreasury();
+        _;
+    }
+
     // ============================================================
     // Constructor
     // ============================================================
@@ -155,6 +165,31 @@ contract VaultV2 is ReentrancyGuard {
         totalBalances += amount;
 
         emit LedgerTransfer(address(0), msg.sender, amount, LedgerReason.UserDeposit);
+    }
+
+    /**
+     * @notice Deposit USDC on behalf of a recipient (platform treasury only)
+     * @param recipient Address whose vault balance is credited
+     * @param amount USDC amount (6 decimals)
+     * @dev Used by the Trial Market Program: treasury tops up the creator's vault
+     *      balance so the factory can pull the $30 seed via pullForNewMarket().
+     *      Requires treasury to be configured via setTreasury() by admin.
+     *      See docs/TRIAL_MARKET_PROGRAM.md §8.1
+     */
+    function depositFor(address recipient, uint256 amount)
+        external
+        nonReentrant
+        whenNotPaused
+        onlyTreasury
+    {
+        if (amount == 0) revert ZeroAmount();
+        if (recipient == address(0)) revert ZeroAddress();
+
+        usdc.safeTransferFrom(msg.sender, address(this), amount);
+        balances[recipient] += amount;
+        totalBalances += amount;
+
+        emit LedgerTransfer(address(0), recipient, amount, LedgerReason.PlatformSeed);
     }
 
     /**
@@ -379,6 +414,12 @@ contract VaultV2 is ReentrancyGuard {
     function removeTrustedFactory(address _factory) external onlyAdmin {
         trustedFactories[_factory] = false;
         emit TrustedFactoryUpdated(_factory, false);
+    }
+
+    function setTreasury(address _treasury) external onlyAdmin {
+        address old = treasury;
+        treasury = _treasury;
+        emit TreasuryUpdated(old, _treasury);
     }
 
     function setExchange(address _exchange) external onlyAdmin {

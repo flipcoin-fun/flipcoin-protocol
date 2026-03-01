@@ -287,4 +287,148 @@ contract VaultV2Test is Test {
         uint256 accounting = vault.totalBalances() + vault.splitReserve() + vault.feePool();
         assertEq(usdcBal, accounting, "invariant: USDC should exactly match accounting");
     }
+
+    // ============================================================
+    // depositFor — Trial Market Program treasury seeding
+    // ============================================================
+
+    address public treasury = makeAddr("treasury");
+
+    function _setupTreasury() internal {
+        // Admin sets the treasury address
+        vm.prank(admin);
+        vault.setTreasury(treasury);
+
+        // Treasury mints and approves USDC
+        usdc.mint(treasury, 1_000_000_000); // 1000 USDC
+        vm.prank(treasury);
+        usdc.approve(address(vault), type(uint256).max);
+    }
+
+    function test_depositFor_creditsRecipient() public {
+        _setupTreasury();
+
+        uint256 seed = 30_000_000; // $30
+        vm.prank(treasury);
+        vault.depositFor(bob, seed);
+
+        assertEq(vault.balances(bob), seed);
+        assertEq(vault.totalBalances(), seed);
+        assertEq(usdc.balanceOf(address(vault)), seed);
+    }
+
+    function test_depositFor_invariantHolds() public {
+        _setupTreasury();
+
+        vm.prank(treasury);
+        vault.depositFor(bob, 30_000_000);
+
+        uint256 usdcBal = usdc.balanceOf(address(vault));
+        uint256 accounting = vault.totalBalances() + vault.splitReserve() + vault.feePool();
+        assertEq(usdcBal, accounting, "invariant must hold after depositFor");
+    }
+
+    function test_depositFor_allowsSubsequentPullForNewMarket() public {
+        _setupTreasury();
+
+        // Treasury tops up bob's balance ($30 seed)
+        vm.prank(treasury);
+        vault.depositFor(bob, 30_000_000);
+
+        // Factory pulls seed from bob to market (simulates trial market creation)
+        vm.prank(factory);
+        vault.pullForNewMarket(bob, market, 30_000_000);
+
+        assertEq(vault.balances(bob), 0);
+        assertEq(vault.balances(market), 30_000_000);
+        // totalBalances unchanged (zero-sum pullForNewMarket)
+        assertEq(vault.totalBalances(), 30_000_000);
+    }
+
+    function test_depositFor_revertsIfNotTreasury() public {
+        _setupTreasury();
+
+        vm.prank(alice); // not treasury
+        vm.expectRevert(VaultV2.NotTreasury.selector);
+        vault.depositFor(bob, 30_000_000);
+    }
+
+    function test_depositFor_revertsIfTreasuryNotSet() public {
+        // No setTreasury call — treasury is address(0)
+        usdc.mint(address(this), 30_000_000);
+        usdc.approve(address(vault), 30_000_000);
+
+        vm.expectRevert(VaultV2.NotTreasury.selector);
+        vault.depositFor(bob, 30_000_000);
+    }
+
+    function test_depositFor_revertsZeroAmount() public {
+        _setupTreasury();
+
+        vm.prank(treasury);
+        vm.expectRevert(VaultV2.ZeroAmount.selector);
+        vault.depositFor(bob, 0);
+    }
+
+    function test_depositFor_revertsZeroAddress() public {
+        _setupTreasury();
+
+        vm.prank(treasury);
+        vm.expectRevert(VaultV2.ZeroAddress.selector);
+        vault.depositFor(address(0), 30_000_000);
+    }
+
+    function test_depositFor_revertsWhenPaused() public {
+        _setupTreasury();
+
+        vm.prank(admin);
+        vault.pause();
+
+        vm.prank(treasury);
+        vm.expectRevert(VaultV2.VaultPaused.selector);
+        vault.depositFor(bob, 30_000_000);
+    }
+
+    // ============================================================
+    // setTreasury
+    // ============================================================
+
+    function test_setTreasury_byAdmin() public {
+        address newTreasury = makeAddr("newTreasury");
+
+        vm.prank(admin);
+        vault.setTreasury(newTreasury);
+
+        assertEq(vault.treasury(), newTreasury);
+    }
+
+    function test_setTreasury_emitsEvent() public {
+        address newTreasury = makeAddr("newTreasury");
+
+        vm.prank(admin);
+        vm.expectEmit(true, true, false, false);
+        emit VaultV2.TreasuryUpdated(address(0), newTreasury);
+        vault.setTreasury(newTreasury);
+    }
+
+    function test_setTreasury_revertsIfNotAdmin() public {
+        vm.prank(alice);
+        vm.expectRevert(VaultV2.NotAdmin.selector);
+        vault.setTreasury(makeAddr("treasury"));
+    }
+
+    function test_setTreasury_canClearTreasury() public {
+        _setupTreasury();
+
+        // Clear treasury (set to zero)
+        vm.prank(admin);
+        vault.setTreasury(address(0));
+
+        assertEq(vault.treasury(), address(0));
+
+        // depositFor should now revert (msg.sender != address(0))
+        vm.prank(treasury);
+        vm.expectRevert(VaultV2.NotTreasury.selector);
+        vault.depositFor(bob, 30_000_000);
+    }
 }

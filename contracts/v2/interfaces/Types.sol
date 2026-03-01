@@ -55,7 +55,8 @@ enum LedgerReason {
     AccumulateFee,
     WithdrawFeePool,
     TransferBetween,
-    MarketInitLiquidity
+    MarketInitLiquidity,
+    PlatformSeed          // Treasury deposits seed on behalf of trial market creator
 }
 
 // ============================================================
