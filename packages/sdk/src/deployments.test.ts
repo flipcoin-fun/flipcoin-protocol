@@ -179,13 +179,17 @@ describe("Address format", () => {
     expect(isZeroAddress(d.marketImplementation)).toBe(false);
   });
 
-  it("Base Mainnet v2 should have placeholder (zero) addresses (not yet deployed)", () => {
+  it("Base Mainnet v2 should have non-zero contract addresses", () => {
     const d = deploymentsBaseMainnetV2;
-    // USDC is the real mainnet address
     expect(isZeroAddress(d.usdc)).toBe(false);
-    // Everything else is zero placeholder
-    expect(isZeroAddress(d.vault)).toBe(true);
-    expect(isZeroAddress(d.factory)).toBe(true);
+    expect(isZeroAddress(d.vault)).toBe(false);
+    expect(isZeroAddress(d.factory)).toBe(false);
+    expect(isZeroAddress(d.delegationRegistry)).toBe(false);
+    expect(isZeroAddress(d.shareToken)).toBe(false);
+    expect(isZeroAddress(d.exchange)).toBe(false);
+    expect(isZeroAddress(d.backstopRouter)).toBe(false);
+    expect(isZeroAddress(d.marketImplementation)).toBe(false);
+    expect(isZeroAddress(d.depositRouter)).toBe(false);
   });
 });
 
