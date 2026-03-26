@@ -80,7 +80,7 @@ const result = lmsr.simulateLmsrBuyYes(state, amount);
 
 // Get contract addresses
 const sepolia = getDeploymentsV2(84532);  // Base Sepolia
-const mainnet = getDeploymentsV2(8453);   // Base (after launch)
+const mainnet = getDeploymentsV2(8453);   // Base Mainnet (block 43786444)
 ```
 
 ```bash
@@ -133,7 +133,7 @@ Auditor: Claude Opus 4.6 (automated line-by-line review, February 2026). See als
 | Network | Status | Addresses |
 |---------|--------|-----------|
 | Base Sepolia | Active | [`deployments/base-sepolia.json`](deployments/base-sepolia.json) |
-| Base Mainnet | Pending | [`deployments/base-mainnet.json`](deployments/base-mainnet.json) |
+| Base Mainnet | Active (block 43786444) | [`deployments/base-mainnet.json`](deployments/base-mainnet.json) |
 
 ## License
 

@@ -22,6 +22,7 @@ export interface DeploymentsV2 extends Deployments {
   exchange: `0x${string}`;
   backstopRouter: `0x${string}`;
   marketImplementation: `0x${string}`;
+  depositRouter: `0x${string}`;
 }
 
 // ============================================================
@@ -50,9 +51,9 @@ export const deploymentsBaseMainnet: Deployments = {
   chainId: 8453,
   chainName: "Base",
   usdc: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-  vault: "0x0000000000000000000000000000000000000000",
-  factory: "0x0000000000000000000000000000000000000000",
-  deployBlock: 0n,
+  vault: "0xACBf5A2f23d2b959D0623fe4345D3F9369dEA15a",
+  factory: "0x0F5f1863213F3eb831FB5F46bF9b83F5cca6c8A6",
+  deployBlock: 43786444n,
 };
 
 export const deploymentsSepolia: Deployments = {
@@ -79,6 +80,7 @@ export const deploymentsBaseSepoliaV2: DeploymentsV2 = {
   exchange: "0x09a11B89951ADC0C7D786d2d313CF60fE9B72d9a",
   backstopRouter: "0x7b050032226E574AA823FF681f6887561cDEab94",
   marketImplementation: "0x713aCC57BE0f185c84344aFF15d69843a94bf87A",
+  depositRouter: "0x0000000000000000000000000000000000000000",
   deployBlock: 37879430n,
 };
 
@@ -86,14 +88,15 @@ export const deploymentsBaseMainnetV2: DeploymentsV2 = {
   chainId: 8453,
   chainName: "Base (v2)",
   usdc: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-  vault: "0x0000000000000000000000000000000000000000",
-  factory: "0x0000000000000000000000000000000000000000",
-  delegationRegistry: "0x0000000000000000000000000000000000000000",
-  shareToken: "0x0000000000000000000000000000000000000000",
-  exchange: "0x0000000000000000000000000000000000000000",
-  backstopRouter: "0x0000000000000000000000000000000000000000",
-  marketImplementation: "0x0000000000000000000000000000000000000000",
-  deployBlock: 0n,
+  vault: "0xACBf5A2f23d2b959D0623fe4345D3F9369dEA15a",
+  factory: "0x0F5f1863213F3eb831FB5F46bF9b83F5cca6c8A6",
+  delegationRegistry: "0xf7Ee72a9f42dA449907a934B74dF82477Ceae0Ee",
+  shareToken: "0x64b050CabF28D28eAb0A121A2259EB284A4fecA8",
+  exchange: "0x41fF5e623e5a5a9B00fE876c348cCEfd4cEEd71B",
+  backstopRouter: "0x5257985E8170443D9341109419Dda4D206bcE9Af",
+  marketImplementation: "0x8F16812c49d015Bc070B587455Cdb88DbAdc9124",
+  depositRouter: "0x649ae5e23d44BB6CBEbDb93ac8a32dFbCd77Cc17",
+  deployBlock: 43786444n,
 };
 
 // ============================================================
