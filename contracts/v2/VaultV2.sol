@@ -434,6 +434,27 @@ contract VaultV2 is ReentrancyGuard {
         backstopRouter = _backstopRouter;
     }
 
+    /**
+     * @notice Admin escape hatch: withdraw from feePool to any address
+     * @dev Covers LMSR fees that have no per-contract tracking/withdrawal path.
+     *      Exchange and ShareToken track their own portions via protocolFeesAccumulated,
+     *      creatorFeesAccumulated, and resolutionFeesAccumulated — admin should only
+     *      withdraw the untracked remainder (LMSR fees).
+     * @param to Recipient address (typically treasury)
+     * @param amount USDC amount to withdraw from feePool
+     */
+    function adminWithdrawFeePool(address to, uint256 amount) external onlyAdmin whenNotPaused {
+        if (amount == 0) revert ZeroAmount();
+        if (to == address(0)) revert ZeroAddress();
+        if (feePool < amount) revert InsufficientFeePool();
+
+        feePool -= amount;
+        balances[to] += amount;
+        totalBalances += amount;
+
+        emit LedgerTransfer(address(this), to, amount, LedgerReason.WithdrawFeePool);
+    }
+
     function pause() external onlyAdmin {
         paused = true;
         emit Paused(msg.sender);
