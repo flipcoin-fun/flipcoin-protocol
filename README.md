@@ -44,6 +44,7 @@ Creator fees always accrue to the wallet owner, even when markets are created by
   - `TradeIntent` (BackstopRouter) — LMSR trades
   - `Order` (Exchange) — CLOB orders
   - `CreateMarket` / `DelegatedCreateMarket` (FactoryV2) — market creation
+  - `DepositIntent` (DepositRouter) — delegated VaultV2 deposits
 - **Delegation** (`DelegationRegistry`) — on-chain delegation with scoped daily spend limits for autonomous agents
 
 ## Contracts
@@ -59,6 +60,7 @@ Creator fees always accrue to the wallet owner, even when markets are created by
 | `ShareToken` | ERC-1155 conditional tokens — split/merge, two-phase resolution, dispute, redeem |
 | `VaultV2` | USDC internal ledger — 4-pool accounting (`balances`, `totalBalances`, `splitReserve`, `feePool`) |
 | `DelegationRegistry` | On-chain delegation — scoped permissions + rolling 24h spend/market-creation limits |
+| `DepositRouter` | Delegated VaultV2 deposits — verifies `DepositIntent` EIP-712 signatures; atomic pull → deposit → transfer to owner |
 
 ## Security Model
 

@@ -140,6 +140,19 @@ struct Delegation {
 }
 
 // ============================================================
+// Structs — DepositRouter DepositIntent
+// ============================================================
+
+/// @notice EIP-712 signed intent for delegated VaultV2 deposits
+struct DepositIntent {
+    address owner;         // Funds owner (USDC pulled from this wallet)
+    address signer;        // == owner, or delegated via DelegationRegistry
+    uint256 amount;        // USDC amount (6 decimals)
+    uint256 nonce;         // Sequential per-signer
+    uint256 deadline;      // Unix timestamp
+}
+
+// ============================================================
 // Structs — Factory Market Creation
 // ============================================================
 
