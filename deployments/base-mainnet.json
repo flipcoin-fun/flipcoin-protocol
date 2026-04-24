@@ -17,6 +17,7 @@
     "backstopRouter": "0x5257985E8170443D9341109419Dda4D206bcE9Af",
     "marketImplementation": "0x8F16812c49d015Bc070B587455Cdb88DbAdc9124",
     "depositRouter": "0x649ae5e23d44BB6CBEbDb93ac8a32dFbCd77Cc17",
+    "feeCollector": "0x12a20Aa075277391b18e97b64FAc1e12980e10d3",
     "deployBlock": 43786444
   }
 }
