@@ -964,4 +964,69 @@ contract FactoryV2Test is BaseV2Test {
             v2, r2, s2
         );
     }
+
+    // ============================================================
+    // Creator Fee Override Tests (Agent Fee Tiers)
+    // ============================================================
+
+    function test_creatorFeeOverride_appliedToMarket() public {
+        vm.prank(admin);
+        factory.setCreatorFeeOverride(alice, 75);
+        assertTrue(factory.hasCreatorFeeOverride(alice));
+        assertEq(factory.creatorFeeOverride(alice), 75);
+
+        MarketParams memory params = _defaultParams();
+        vm.prank(alice);
+        address market = factory.createMarket(params, SEED_USDC, 5000);
+        assertEq(MarketLMSR(market).creatorFeeBps(), 75);
+        assertEq(
+            MarketLMSR(market).totalFeeBps(),
+            uint16(75) + DEFAULT_MAKER_FEE_BPS + DEFAULT_TAKER_FEE_BPS
+        );
+    }
+
+    function test_creatorFeeOverride_defaultWhenNoOverride() public {
+        MarketParams memory params = _defaultParams();
+        vm.prank(bob);
+        address market = factory.createMarket(params, SEED_USDC, 5000);
+        assertEq(MarketLMSR(market).creatorFeeBps(), DEFAULT_CREATOR_FEE_BPS);
+        assertEq(MarketLMSR(market).totalFeeBps(), DEFAULT_TOTAL_FEE_BPS);
+    }
+
+    function test_creatorFeeOverride_clearResetsToDefault() public {
+        vm.startPrank(admin);
+        factory.setCreatorFeeOverride(alice, 75);
+        factory.clearCreatorFeeOverride(alice);
+        assertFalse(factory.hasCreatorFeeOverride(alice));
+        vm.stopPrank();
+
+        MarketParams memory params = _defaultParams();
+        vm.prank(alice);
+        address market = factory.createMarket(params, SEED_USDC, 5000);
+        assertEq(MarketLMSR(market).creatorFeeBps(), DEFAULT_CREATOR_FEE_BPS);
+    }
+
+    function test_creatorFeeOverride_onlyAdmin_reverts() public {
+        vm.prank(alice);
+        vm.expectRevert(FactoryV2.NotAdmin.selector);
+        factory.setCreatorFeeOverride(bob, 75);
+    }
+
+    function test_creatorFeeOverride_feeTooHigh_reverts() public {
+        vm.prank(admin);
+        vm.expectRevert("fee too high");
+        factory.setCreatorFeeOverride(alice, 501);
+    }
+
+    function test_creatorFeeOverride_zeroCreator_reverts() public {
+        vm.prank(admin);
+        vm.expectRevert("zero creator");
+        factory.setCreatorFeeOverride(address(0), 75);
+    }
+
+    function test_clearCreatorFeeOverride_noOverride_reverts() public {
+        vm.prank(admin);
+        vm.expectRevert("no override");
+        factory.clearCreatorFeeOverride(alice);
+    }
 }

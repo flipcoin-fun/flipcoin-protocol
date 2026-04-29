@@ -117,6 +117,15 @@ contract FactoryV2 is EIP712 {
     mapping(address => bool) public trustedRelayers;
 
     // ============================================================
+    // State — Per-Creator Fee Overrides (Agent Fee Tiers)
+    // ============================================================
+
+    /// @notice Per-creator fee override in bps (admin-controlled)
+    mapping(address => uint16) public creatorFeeOverride;
+    /// @notice Whether a creator has an active fee override
+    mapping(address => bool) public hasCreatorFeeOverride;
+
+    // ============================================================
     // Events
     // ============================================================
 
@@ -144,6 +153,8 @@ contract FactoryV2 is EIP712 {
     event AdminTransferred(address oldAdmin, address newAdmin);
     event RelayerAdded(address indexed relayer);
     event RelayerRemoved(address indexed relayer);
+    event CreatorFeeOverrideSet(address indexed creator, uint16 feeBps);
+    event CreatorFeeOverrideCleared(address indexed creator);
 
     // ============================================================
     // Errors
@@ -428,6 +439,21 @@ contract FactoryV2 is EIP712 {
         emit RelayerRemoved(relayer);
     }
 
+    function setCreatorFeeOverride(address creator, uint16 feeBps) external onlyAdmin {
+        require(creator != address(0), "zero creator");
+        require(feeBps <= 500, "fee too high");
+        creatorFeeOverride[creator] = feeBps;
+        hasCreatorFeeOverride[creator] = true;
+        emit CreatorFeeOverrideSet(creator, feeBps);
+    }
+
+    function clearCreatorFeeOverride(address creator) external onlyAdmin {
+        require(hasCreatorFeeOverride[creator], "no override");
+        delete creatorFeeOverride[creator];
+        hasCreatorFeeOverride[creator] = false;
+        emit CreatorFeeOverrideCleared(creator);
+    }
+
     // ============================================================
     // Internal — Core Market Creation
     // ============================================================
@@ -475,14 +501,19 @@ contract FactoryV2 is EIP712 {
         // Get token IDs from ShareToken
         (uint256 yesId, uint256 noId) = shareToken.getTokenIds(conditionId, usdc);
 
-        // ── 4. Register in Exchange (immutable creator fee) ──
-        exchange.setCreatorFee(conditionId, creator, config.defaultCreatorFeeBps);
+        // ── 4. Determine creator fee (override or default) ──
+        uint16 finalCreatorFeeBps = hasCreatorFeeOverride[creator]
+            ? creatorFeeOverride[creator]
+            : config.defaultCreatorFeeBps;
+
+        // ── 5. Register in Exchange (immutable creator fee) ──
+        exchange.setCreatorFee(conditionId, creator, finalCreatorFeeBps);
         exchange.registerToken(yesId, noId, conditionId);
 
-        // ── 5. Clone MarketLMSR via EIP-1167 ──
+        // ── 6. Clone MarketLMSR via EIP-1167 ──
         market = Clones.clone(marketImplementation);
 
-        // ── 6. Configure the clone ──
+        // ── 7. Configure the clone ──
         MarketConfigV2 memory mc = MarketConfigV2({
             admin: config.admin,
             creator: creator,
@@ -494,8 +525,8 @@ contract FactoryV2 is EIP712 {
             conditionId: conditionId,
             yesTokenId: yesId,
             noTokenId: noId,
-            totalFeeBps: config.defaultCreatorFeeBps + config.defaultMakerFeeBps + config.defaultTakerFeeBps,
-            creatorFeeBps: config.defaultCreatorFeeBps,
+            totalFeeBps: finalCreatorFeeBps + config.defaultMakerFeeBps + config.defaultTakerFeeBps,
+            creatorFeeBps: finalCreatorFeeBps,
             protocolFeeBps: config.defaultMakerFeeBps + config.defaultTakerFeeBps,
             deadline: params.deadline,
             question: params.question,
