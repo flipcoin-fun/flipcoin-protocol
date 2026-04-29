@@ -10,13 +10,17 @@
   "v2": {
     "usdc": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
     "vault": "0xACBf5A2f23d2b959D0623fe4345D3F9369dEA15a",
-    "factory": "0x0F5f1863213F3eb831FB5F46bF9b83F5cca6c8A6",
+    "factory": "0x1caaD8cA115010bF95D98E85EF0fcd426f8236ad",
+    "legacyFactories": [
+      "0x0F5f1863213F3eb831FB5F46bF9b83F5cca6c8A6"
+    ],
     "delegationRegistry": "0xf7Ee72a9f42dA449907a934B74dF82477Ceae0Ee",
     "shareToken": "0x64b050CabF28D28eAb0A121A2259EB284A4fecA8",
     "exchange": "0x41fF5e623e5a5a9B00fE876c348cCEfd4cEEd71B",
     "backstopRouter": "0x5257985E8170443D9341109419Dda4D206bcE9Af",
-    "marketImplementation": "0x8F16812c49d015Bc070B587455Cdb88DbAdc9124",
+    "marketImplementation": "0x0517d54A99768E9601EFFc2dDB0886C806f2b2Bb",
     "depositRouter": "0x649ae5e23d44BB6CBEbDb93ac8a32dFbCd77Cc17",
+    "feeCollector": "0x12a20Aa075277391b18e97b64FAc1e12980e10d3",
     "deployBlock": 43786444
   }
 }
