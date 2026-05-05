@@ -289,7 +289,7 @@ contract VaultV2Test is Test {
     }
 
     // ============================================================
-    // depositFor — Trial Market Program treasury seeding
+    // depositFor — treasury seeding on behalf of a market creator
     // ============================================================
 
     address public treasury = makeAddr("treasury");
@@ -335,7 +335,7 @@ contract VaultV2Test is Test {
         vm.prank(treasury);
         vault.depositFor(bob, 30_000_000);
 
-        // Factory pulls seed from bob to market (simulates trial market creation)
+        // Factory pulls seed from bob to market (simulates platform-funded creation)
         vm.prank(factory);
         vault.pullForNewMarket(bob, market, 30_000_000);
 
