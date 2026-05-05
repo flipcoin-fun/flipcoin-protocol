@@ -171,10 +171,9 @@ contract VaultV2 is ReentrancyGuard {
      * @notice Deposit USDC on behalf of a recipient (platform treasury only)
      * @param recipient Address whose vault balance is credited
      * @param amount USDC amount (6 decimals)
-     * @dev Used by the Trial Market Program: treasury tops up the creator's vault
-     *      balance so the factory can pull the $30 seed via pullForNewMarket().
-     *      Requires treasury to be configured via setTreasury() by admin.
-     *      See docs/TRIAL_MARKET_PROGRAM.md §8.1
+     * @dev Treasury tops up a creator's vault balance so the factory can pull the
+     *      seed via pullForNewMarket(). Requires treasury to be configured via
+     *      setTreasury() by admin.
      */
     function depositFor(address recipient, uint256 amount)
         external
