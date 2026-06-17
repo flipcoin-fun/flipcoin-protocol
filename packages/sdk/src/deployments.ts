@@ -23,6 +23,8 @@ export interface DeploymentsV2 extends Deployments {
   backstopRouter: `0x${string}`;
   marketImplementation: `0x${string}`;
   depositRouter: `0x${string}`;
+  /** LmsrFeeCollector — whitelisted on VaultV2 for LMSR fee withdrawal. Optional until deployed per chain. */
+  feeCollector?: `0x${string}`;
 }
 
 // ============================================================
@@ -72,16 +74,16 @@ export const deploymentsSepolia: Deployments = {
 export const deploymentsBaseSepoliaV2: DeploymentsV2 = {
   chainId: 84532,
   chainName: "Base Sepolia (v2)",
-  usdc: "0x305470163394b589DC20B25E8D281B91e4c0647e",
-  vault: "0xFf7F3FB8Cd2531d620A0895f29aB137965E9CC51",
-  factory: "0x9AD7a9FF367D6c762c3211070111F47C682293a0",
-  delegationRegistry: "0xC732b2851950E7CF6C8100bC992E2737d4EA23fC",
-  shareToken: "0xf3b1E673c8FEc06EFDf16d5B9AF6BC9746bcDe48",
-  exchange: "0x09a11B89951ADC0C7D786d2d313CF60fE9B72d9a",
-  backstopRouter: "0x7b050032226E574AA823FF681f6887561cDEab94",
-  marketImplementation: "0x713aCC57BE0f185c84344aFF15d69843a94bf87A",
-  depositRouter: "0x0000000000000000000000000000000000000000",
-  deployBlock: 37879430n,
+  usdc: "0xf60a5a0fca9805bFc5a5cdf9356F67091aD5DebD",
+  vault: "0xF23527BD7989fbde345059D1AaAFa663532C01c1",
+  factory: "0xa681D7D1AeECBf426C1c28DAeD56987A436C52AF",
+  delegationRegistry: "0x945f5557b3B0037b9cEB694303C33d418251762A",
+  shareToken: "0xDdBD56caDaBd4336a0743D2cAf623eb400e0C290",
+  exchange: "0xeAeF77160e87C5a107156B3cB7324Ab587087850",
+  backstopRouter: "0x7b0E6aa1DAEC704003f81e2fEef3Fa5DAB157b2a",
+  marketImplementation: "0xDd70070758c4Cb78E7F72310D0f98657B2F77FC9",
+  depositRouter: "0xdCcFD2db3Def560E753365A5eaF2F44251B9843a",
+  deployBlock: 38314732n,
 };
 
 export const deploymentsBaseMainnetV2: DeploymentsV2 = {
@@ -96,6 +98,7 @@ export const deploymentsBaseMainnetV2: DeploymentsV2 = {
   backstopRouter: "0x5257985E8170443D9341109419Dda4D206bcE9Af",
   marketImplementation: "0x8F16812c49d015Bc070B587455Cdb88DbAdc9124",
   depositRouter: "0x649ae5e23d44BB6CBEbDb93ac8a32dFbCd77Cc17",
+  feeCollector: "0x12a20Aa075277391b18e97b64FAc1e12980e10d3",
   deployBlock: 43786444n,
 };
 
